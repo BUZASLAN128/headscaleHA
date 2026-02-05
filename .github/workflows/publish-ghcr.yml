@@ -36,4 +36,5 @@ jobs:
         env:
           KO_DOCKER_REPO: ghcr.io/buzaslan128/headscaleha
         run: |
-          ko build ./cmd/headscale --bare --tags=main --platform=linux/amd64,linux/arm64
+          TAG=${GITHUB_SHA::8}
+          ko build ./cmd/headscale --bare --tags=main,sha-${TAG} --platform=linux/amd64,linux/arm64
