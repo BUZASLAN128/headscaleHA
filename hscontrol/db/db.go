@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -879,6 +880,18 @@ func openDB(cfg types.DatabaseConfig) (*gorm.DB, error) {
 		})
 		if err != nil {
 			return nil, err
+		}
+
+		// CockroachDB compatibility: disable FK/constraint migration to avoid
+		// unsupported DO $$ blocks used for constraint renames in Postgres.
+		if sqlDB, err := db.DB(); err == nil {
+			var version string
+			if err := sqlDB.QueryRow("SELECT version()").Scan(&version); err == nil {
+				if strings.Contains(version, "CockroachDB") {
+					log.Warn().Msg("Detected CockroachDB; disabling FK constraint migration")
+					db.Config.DisableForeignKeyConstraintWhenMigrating = true
+				}
+			}
 		}
 
 		sqlDB, _ := db.DB()
