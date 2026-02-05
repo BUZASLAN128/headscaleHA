@@ -575,13 +575,20 @@ AND auth_key_id NOT IN (
 				ID: "202511131445-node-forced-tags-to-tags",
 				Migrate: func(tx *gorm.DB) error {
 					hasColumn := func(col string) bool {
-						var exists int
+						var exists bool
 						if err := tx.Raw(
-							"SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ? LIMIT 1",
+							`SELECT EXISTS (
+								 SELECT 1
+								   FROM information_schema.columns
+								  WHERE table_catalog = current_database()
+								    AND table_schema = current_schema()
+								    AND table_name = ?
+								    AND column_name = ?
+								 )`,
 							"nodes",
 							col,
 						).Scan(&exists).Error; err == nil {
-							return exists == 1
+							return exists
 						}
 						return tx.Migrator().HasColumn(&types.Node{}, col)
 					}
@@ -607,7 +614,8 @@ AND auth_key_id NOT IN (
 
 					// Rename the column from forced_tags to tags
 					if err := tx.Migrator().RenameColumn(&types.Node{}, "forced_tags", "tags"); err != nil {
-						if strings.Contains(err.Error(), "already exists") {
+						lowerErr := strings.ToLower(err.Error())
+						if strings.Contains(lowerErr, "already exists") || strings.Contains(lowerErr, "duplicate column") {
 							return nil
 						}
 						return fmt.Errorf("renaming forced_tags to tags: %w", err)
