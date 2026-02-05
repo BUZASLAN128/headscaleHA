@@ -46,6 +46,11 @@ var (
 	ErrSSHWildcardDestination             = errors.New("wildcard (*) is not supported as SSH destination")
 )
 
+// ACL validation errors.
+var (
+	ErrACLAutogroupSelfInvalidSource = errors.New("autogroup:self destination requires sources to be users, groups, or autogroup:member only")
+)
+
 type Asterix int
 
 func (a Asterix) Validate() error {
@@ -117,11 +122,11 @@ func (a Asterix) UnmarshalJSON(b []byte) error {
 func (a Asterix) Resolve(_ *Policy, _ types.Users, nodes views.Slice[types.NodeView]) (*netipx.IPSet, error) {
 	var ips netipx.IPSetBuilder
 
-	// TODO(kradalby):
-	// Should this actually only be the CGNAT spaces? I do not think so, because
-	// we also want to include subnet routers right?
-	ips.AddPrefix(tsaddr.AllIPv4())
-	ips.AddPrefix(tsaddr.AllIPv6())
+	// Use Tailscale's CGNAT range for IPv4 and ULA range for IPv6.
+	// This matches Tailscale's behavior where wildcard (*) refers to
+	// "any node in the tailnet" which uses these address ranges.
+	ips.AddPrefix(tsaddr.CGNATRange())
+	ips.AddPrefix(tsaddr.TailscaleULARange())
 
 	return ips.IPSet()
 }
@@ -1281,21 +1286,21 @@ func (a SSHAction) MarshalJSON() ([]byte, error) {
 type Protocol string
 
 const (
-	ProtocolICMP     Protocol = "icmp"
-	ProtocolIGMP     Protocol = "igmp"
-	ProtocolIPv4     Protocol = "ipv4"
-	ProtocolIPInIP   Protocol = "ip-in-ip"
-	ProtocolTCP      Protocol = "tcp"
-	ProtocolEGP      Protocol = "egp"
-	ProtocolIGP      Protocol = "igp"
-	ProtocolUDP      Protocol = "udp"
-	ProtocolGRE      Protocol = "gre"
-	ProtocolESP      Protocol = "esp"
-	ProtocolAH       Protocol = "ah"
-	ProtocolIPv6ICMP Protocol = "ipv6-icmp"
-	ProtocolSCTP     Protocol = "sctp"
-	ProtocolFC       Protocol = "fc"
-	ProtocolWildcard Protocol = "*"
+	ProtocolNameICMP     Protocol = "icmp"
+	ProtocolNameIGMP     Protocol = "igmp"
+	ProtocolNameIPv4     Protocol = "ipv4"
+	ProtocolNameIPInIP   Protocol = "ip-in-ip"
+	ProtocolNameTCP      Protocol = "tcp"
+	ProtocolNameEGP      Protocol = "egp"
+	ProtocolNameIGP      Protocol = "igp"
+	ProtocolNameUDP      Protocol = "udp"
+	ProtocolNameGRE      Protocol = "gre"
+	ProtocolNameESP      Protocol = "esp"
+	ProtocolNameAH       Protocol = "ah"
+	ProtocolNameIPv6ICMP Protocol = "ipv6-icmp"
+	ProtocolNameSCTP     Protocol = "sctp"
+	ProtocolNameFC       Protocol = "fc"
+	ProtocolNameWildcard Protocol = "*"
 )
 
 // String returns the string representation of the Protocol.
@@ -1306,33 +1311,33 @@ func (p Protocol) String() string {
 // Description returns the human-readable description of the Protocol.
 func (p Protocol) Description() string {
 	switch p {
-	case ProtocolICMP:
+	case ProtocolNameICMP:
 		return "Internet Control Message Protocol"
-	case ProtocolIGMP:
+	case ProtocolNameIGMP:
 		return "Internet Group Management Protocol"
-	case ProtocolIPv4:
+	case ProtocolNameIPv4:
 		return "IPv4 encapsulation"
-	case ProtocolTCP:
+	case ProtocolNameTCP:
 		return "Transmission Control Protocol"
-	case ProtocolEGP:
+	case ProtocolNameEGP:
 		return "Exterior Gateway Protocol"
-	case ProtocolIGP:
+	case ProtocolNameIGP:
 		return "Interior Gateway Protocol"
-	case ProtocolUDP:
+	case ProtocolNameUDP:
 		return "User Datagram Protocol"
-	case ProtocolGRE:
+	case ProtocolNameGRE:
 		return "Generic Routing Encapsulation"
-	case ProtocolESP:
+	case ProtocolNameESP:
 		return "Encapsulating Security Payload"
-	case ProtocolAH:
+	case ProtocolNameAH:
 		return "Authentication Header"
-	case ProtocolIPv6ICMP:
+	case ProtocolNameIPv6ICMP:
 		return "Internet Control Message Protocol for IPv6"
-	case ProtocolSCTP:
+	case ProtocolNameSCTP:
 		return "Stream Control Transmission Protocol"
-	case ProtocolFC:
+	case ProtocolNameFC:
 		return "Fibre Channel"
-	case ProtocolWildcard:
+	case ProtocolNameWildcard:
 		return "Wildcard (not supported - use specific protocol)"
 	default:
 		return "Unknown Protocol"
@@ -1344,42 +1349,44 @@ func (p Protocol) Description() string {
 func (p Protocol) parseProtocol() ([]int, bool) {
 	switch p {
 	case "":
-		// Empty protocol applies to TCP and UDP traffic only
-		return []int{protocolTCP, protocolUDP}, false
-	case ProtocolWildcard:
+		// Empty protocol applies to TCP, UDP, ICMP, and ICMPv6 traffic
+		// This matches Tailscale's behavior for protocol defaults
+		return []int{ProtocolTCP, ProtocolUDP, ProtocolICMP, ProtocolIPv6ICMP}, false
+	case ProtocolNameWildcard:
 		// Wildcard protocol - defensive handling (should not reach here due to validation)
 		return nil, false
-	case ProtocolIGMP:
-		return []int{protocolIGMP}, true
-	case ProtocolIPv4, ProtocolIPInIP:
-		return []int{protocolIPv4}, true
-	case ProtocolTCP:
-		return []int{protocolTCP}, false
-	case ProtocolEGP:
-		return []int{protocolEGP}, true
-	case ProtocolIGP:
-		return []int{protocolIGP}, true
-	case ProtocolUDP:
-		return []int{protocolUDP}, false
-	case ProtocolGRE:
-		return []int{protocolGRE}, true
-	case ProtocolESP:
-		return []int{protocolESP}, true
-	case ProtocolAH:
-		return []int{protocolAH}, true
-	case ProtocolSCTP:
-		return []int{protocolSCTP}, false
-	case ProtocolICMP:
-		return []int{protocolICMP, protocolIPv6ICMP}, true
+	case ProtocolNameIGMP:
+		return []int{ProtocolIGMP}, true
+	case ProtocolNameIPv4, ProtocolNameIPInIP:
+		return []int{ProtocolIPv4}, true
+	case ProtocolNameTCP:
+		return []int{ProtocolTCP}, false
+	case ProtocolNameEGP:
+		return []int{ProtocolEGP}, true
+	case ProtocolNameIGP:
+		return []int{ProtocolIGP}, true
+	case ProtocolNameUDP:
+		return []int{ProtocolUDP}, false
+	case ProtocolNameGRE:
+		return []int{ProtocolGRE}, true
+	case ProtocolNameESP:
+		return []int{ProtocolESP}, true
+	case ProtocolNameAH:
+		return []int{ProtocolAH}, true
+	case ProtocolNameSCTP:
+		return []int{ProtocolSCTP}, false
+	case ProtocolNameICMP:
+		// ICMP only - use "ipv6-icmp" or protocol number 58 for ICMPv6
+		return []int{ProtocolICMP}, true
 	default:
 		// Try to parse as a numeric protocol number
 		// This should not fail since validation happened during unmarshaling
 		protocolNumber, _ := strconv.Atoi(string(p))
 
 		// Determine if wildcard is needed based on protocol number
-		needsWildcard := protocolNumber != protocolTCP &&
-			protocolNumber != protocolUDP &&
-			protocolNumber != protocolSCTP
+		needsWildcard := protocolNumber != ProtocolTCP &&
+			protocolNumber != ProtocolUDP &&
+			protocolNumber != ProtocolSCTP
 
 		return []int{protocolNumber}, needsWildcard
 	}
@@ -1403,11 +1410,11 @@ func (p *Protocol) UnmarshalJSON(b []byte) error {
 // validate checks if the Protocol is valid.
 func (p Protocol) validate() error {
 	switch p {
-	case "", ProtocolICMP, ProtocolIGMP, ProtocolIPv4, ProtocolIPInIP,
-		ProtocolTCP, ProtocolEGP, ProtocolIGP, ProtocolUDP, ProtocolGRE,
-		ProtocolESP, ProtocolAH, ProtocolSCTP:
+	case "", ProtocolNameICMP, ProtocolNameIGMP, ProtocolNameIPv4, ProtocolNameIPInIP,
+		ProtocolNameTCP, ProtocolNameEGP, ProtocolNameIGP, ProtocolNameUDP, ProtocolNameGRE,
+		ProtocolNameESP, ProtocolNameAH, ProtocolNameSCTP:
 		return nil
-	case ProtocolWildcard:
+	case ProtocolNameWildcard:
 		// Wildcard "*" is not allowed - Tailscale rejects it
 		return fmt.Errorf("proto name \"*\" not known; use protocol number 0-255 or protocol name (icmp, tcp, udp, etc.)")
 	default:
@@ -1439,19 +1446,19 @@ func (p Protocol) MarshalJSON() ([]byte, error) {
 
 // Protocol constants matching the IANA numbers
 const (
-	protocolICMP     = 1   // Internet Control Message
-	protocolIGMP     = 2   // Internet Group Management
-	protocolIPv4     = 4   // IPv4 encapsulation
-	protocolTCP      = 6   // Transmission Control
-	protocolEGP      = 8   // Exterior Gateway Protocol
-	protocolIGP      = 9   // any private interior gateway (used by Cisco for their IGRP)
-	protocolUDP      = 17  // User Datagram
-	protocolGRE      = 47  // Generic Routing Encapsulation
-	protocolESP      = 50  // Encap Security Payload
-	protocolAH       = 51  // Authentication Header
-	protocolIPv6ICMP = 58  // ICMP for IPv6
-	protocolSCTP     = 132 // Stream Control Transmission Protocol
-	protocolFC       = 133 // Fibre Channel
+	ProtocolICMP     = 1   // Internet Control Message
+	ProtocolIGMP     = 2   // Internet Group Management
+	ProtocolIPv4     = 4   // IPv4 encapsulation
+	ProtocolTCP      = 6   // Transmission Control
+	ProtocolEGP      = 8   // Exterior Gateway Protocol
+	ProtocolIGP      = 9   // any private interior gateway (used by Cisco for their IGRP)
+	ProtocolUDP      = 17  // User Datagram
+	ProtocolGRE      = 47  // Generic Routing Encapsulation
+	ProtocolESP      = 50  // Encap Security Payload
+	ProtocolAH       = 51  // Authentication Header
+	ProtocolIPv6ICMP = 58  // ICMP for IPv6
+	ProtocolSCTP     = 132 // Stream Control Transmission Protocol
+	ProtocolFC       = 133 // Fibre Channel
 )
 
 type ACL struct {
@@ -1679,6 +1686,51 @@ func validateSSHSrcDstCombination(sources SSHSrcAliases, destinations SSHDstAlia
 	return nil
 }
 
+// validateACLSrcDstCombination validates that ACL source/destination combinations
+// follow Tailscale's security model:
+// - autogroup:self destinations require ALL sources to be users, groups, autogroup:member, or wildcard (*)
+// - Tags, autogroup:tagged, hosts, and raw IPs are NOT valid sources for autogroup:self
+// - Wildcard (*) is allowed because autogroup:self evaluation narrows it per-node to the node's own IPs.
+func validateACLSrcDstCombination(sources Aliases, destinations []AliasWithPorts) error {
+	// Check if any destination is autogroup:self
+	hasAutogroupSelf := false
+
+	for _, dst := range destinations {
+		if ag, ok := dst.Alias.(*AutoGroup); ok && ag.Is(AutoGroupSelf) {
+			hasAutogroupSelf = true
+			break
+		}
+	}
+
+	if !hasAutogroupSelf {
+		return nil // No autogroup:self, no validation needed
+	}
+
+	// Validate all sources are valid for autogroup:self
+	for _, src := range sources {
+		switch v := src.(type) {
+		case *Username, *Group, Asterix:
+			// Valid sources - users, groups, and wildcard (*) are allowed
+			// Wildcard is allowed because autogroup:self evaluation narrows it per-node
+			continue
+		case *AutoGroup:
+			if v.Is(AutoGroupMember) {
+				continue // autogroup:member is valid
+			}
+			// autogroup:tagged and others are NOT valid
+			return ErrACLAutogroupSelfInvalidSource
+		case *Tag, *Host, *Prefix:
+			// Tags, hosts, and IPs are NOT valid sources for autogroup:self
+			return ErrACLAutogroupSelfInvalidSource
+		default:
+			// Unknown type - be conservative and reject
+			return ErrACLAutogroupSelfInvalidSource
+		}
+	}
+
+	return nil
+}
+
 // validate reports if there are any errors in a policy after
 // the unmarshaling process.
 // It runs through all rules and checks if there are any inconsistencies
@@ -1759,6 +1811,12 @@ func (p *Policy) validate() error {
 
 		// Validate protocol-port compatibility
 		if err := validateProtocolPortCompatibility(acl.Protocol, acl.Destinations); err != nil {
+			errs = append(errs, err)
+		}
+
+		// Validate ACL source/destination combinations follow Tailscale's security model
+		err := validateACLSrcDstCombination(acl.Sources, acl.Destinations)
+		if err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -2114,7 +2172,7 @@ func unmarshalPolicy(b []byte) (*Policy, error) {
 // can have specific ports. All other protocols should only use wildcard ports.
 func validateProtocolPortCompatibility(protocol Protocol, destinations []AliasWithPorts) error {
 	// Only TCP, UDP, and SCTP support specific ports
-	supportsSpecificPorts := protocol == ProtocolTCP || protocol == ProtocolUDP || protocol == ProtocolSCTP || protocol == ""
+	supportsSpecificPorts := protocol == ProtocolNameTCP || protocol == ProtocolNameUDP || protocol == ProtocolNameSCTP || protocol == ""
 
 	if supportsSpecificPorts {
 		return nil // No validation needed for these protocols
