@@ -574,8 +574,20 @@ AND auth_key_id NOT IN (
 				// This must run after migration 202505141324 which creates tables with forced_tags.
 				ID: "202511131445-node-forced-tags-to-tags",
 				Migrate: func(tx *gorm.DB) error {
-					hasForced := tx.Migrator().HasColumn(&types.Node{}, "forced_tags")
-					hasTags := tx.Migrator().HasColumn(&types.Node{}, "tags")
+					hasColumn := func(col string) bool {
+						var exists int
+						if err := tx.Raw(
+							"SELECT 1 FROM information_schema.columns WHERE table_name = ? AND column_name = ? LIMIT 1",
+							"nodes",
+							col,
+						).Scan(&exists).Error; err == nil {
+							return exists == 1
+						}
+						return tx.Migrator().HasColumn(&types.Node{}, col)
+					}
+
+					hasForced := hasColumn("forced_tags")
+					hasTags := hasColumn("tags")
 
 					// If tags already exists, avoid failing on rename. Merge values if forced_tags exists.
 					if hasTags {
@@ -595,6 +607,9 @@ AND auth_key_id NOT IN (
 
 					// Rename the column from forced_tags to tags
 					if err := tx.Migrator().RenameColumn(&types.Node{}, "forced_tags", "tags"); err != nil {
+						if strings.Contains(err.Error(), "already exists") {
+							return nil
+						}
 						return fmt.Errorf("renaming forced_tags to tags: %w", err)
 					}
 
