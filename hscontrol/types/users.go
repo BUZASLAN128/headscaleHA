@@ -12,6 +12,8 @@ import (
 
 	v1 "github.com/juanfont/headscale/gen/go/headscale/v1"
 	"github.com/juanfont/headscale/hscontrol/util"
+	"github.com/juanfont/headscale/hscontrol/util/zlog/zf"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	"gorm.io/gorm"
@@ -194,6 +196,30 @@ func (u *User) Proto() *v1.User {
 	}
 }
 
+// MarshalZerologObject implements zerolog.LogObjectMarshaler for safe logging.
+func (u *User) MarshalZerologObject(e *zerolog.Event) {
+	if u == nil {
+		return
+	}
+
+	e.Uint(zf.UserID, u.ID)
+	e.Str(zf.UserName, u.Username())
+	e.Str(zf.UserDisplay, u.Display())
+
+	if u.Provider != "" {
+		e.Str(zf.UserProvider, u.Provider)
+	}
+}
+
+// MarshalZerologObject implements zerolog.LogObjectMarshaler for UserView.
+func (u UserView) MarshalZerologObject(e *zerolog.Event) {
+	if !u.Valid() {
+		return
+	}
+
+	u.ж.MarshalZerologObject(e)
+}
+
 // JumpCloud returns a JSON where email_verified is returned as a
 // string "true" or "false" instead of a boolean.
 // This maps bool to a specific type with a custom unmarshaler to
@@ -205,7 +231,7 @@ func (bit *FlexibleBoolean) UnmarshalJSON(data []byte) error {
 	var val any
 	err := json.Unmarshal(data, &val)
 	if err != nil {
-		return fmt.Errorf("could not unmarshal data: %w", err)
+		return fmt.Errorf("unmarshalling data: %w", err)
 	}
 
 	switch v := val.(type) {
@@ -214,12 +240,12 @@ func (bit *FlexibleBoolean) UnmarshalJSON(data []byte) error {
 	case string:
 		pv, err := strconv.ParseBool(v)
 		if err != nil {
-			return fmt.Errorf("could not parse %s as boolean: %w", v, err)
+			return fmt.Errorf("parsing %s as boolean: %w", v, err)
 		}
 		*bit = FlexibleBoolean(pv)
 
 	default:
-		return fmt.Errorf("could not parse %v as boolean", v)
+		return fmt.Errorf("parsing %v as boolean", v)
 	}
 
 	return nil
@@ -366,7 +392,7 @@ func (u *User) FromClaim(claims *OIDCClaims, emailVerifiedRequired bool) {
 	if err == nil {
 		u.Name = claims.Username
 	} else {
-		log.Debug().Caller().Err(err).Msgf("Username %s is not valid", claims.Username)
+		log.Debug().Caller().Err(err).Msgf("username %s is not valid", claims.Username)
 	}
 
 	if claims.EmailVerified || !FlexibleBoolean(emailVerifiedRequired) {

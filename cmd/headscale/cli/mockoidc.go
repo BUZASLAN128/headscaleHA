@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/juanfont/headscale/hscontrol/util/zlog/zf"
 	"github.com/oauth2-proxy/mockoidc"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -35,7 +36,7 @@ var mockOidcCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		err := mockOIDC()
 		if err != nil {
-			log.Error().Err(err).Msgf("Error running mock OIDC server")
+			log.Error().Err(err).Msgf("error running mock OIDC server")
 			os.Exit(1)
 		}
 	},
@@ -78,9 +79,9 @@ func mockOIDC() error {
 		return fmt.Errorf("unmarshalling users: %w", err)
 	}
 
-	log.Info().Interface("users", users).Msg("loading users from JSON")
+	log.Info().Interface(zf.Users, users).Msg("loading users from JSON")
 
-	log.Info().Msgf("Access token TTL: %s", accessTTL)
+	log.Info().Msgf("access token TTL: %s", accessTTL)
 
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
@@ -101,8 +102,9 @@ func mockOIDC() error {
 	if err != nil {
 		return err
 	}
-	log.Info().Msgf("Mock OIDC server listening on %s", listener.Addr().String())
-	log.Info().Msgf("Issuer: %s", mock.Issuer())
+
+	log.Info().Msgf("mock OIDC server listening on %s", listener.Addr().String())
+	log.Info().Msgf("issuer: %s", mock.Issuer())
 	c := make(chan struct{})
 	<-c
 
@@ -135,10 +137,10 @@ func getMockOIDC(clientID string, clientSecret string, users []mockoidc.MockUser
 
 	mock.AddMiddleware(func(h http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			log.Info().Msgf("Request: %+v", r)
+			log.Info().Msgf("request: %+v", r)
 			h.ServeHTTP(w, r)
 			if r.Response != nil {
-				log.Info().Msgf("Response: %+v", r.Response)
+				log.Info().Msgf("response: %+v", r.Response)
 			}
 		})
 	})

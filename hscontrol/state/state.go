@@ -22,6 +22,7 @@ import (
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/types/change"
 	"github.com/juanfont/headscale/hscontrol/util"
+	"github.com/juanfont/headscale/hscontrol/util/zlog/zf"
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"golang.org/x/sync/errgroup"
@@ -118,12 +119,12 @@ func NewState(cfg *types.Config) (*State, error) {
 		registrationCache,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("init database: %w", err)
+		return nil, fmt.Errorf("initializing database: %w", err)
 	}
 
 	ipAlloc, err := hsdb.NewIPAllocator(db, cfg.PrefixV4, cfg.PrefixV6, cfg.IPAllocation)
 	if err != nil {
-		return nil, fmt.Errorf("init ip allocatior: %w", err)
+		return nil, fmt.Errorf("initializing IP allocator: %w", err)
 	}
 
 	nodes, err := db.ListNodes()
@@ -149,7 +150,7 @@ func NewState(cfg *types.Config) (*State, error) {
 
 	polMan, err := policy.NewPolicyManager(pol, users, nodes.ViewSlice())
 	if err != nil {
-		return nil, fmt.Errorf("init policy manager: %w", err)
+		return nil, fmt.Errorf("initializing policy manager: %w", err)
 	}
 
 	// Apply defaults for NodeStore batch configuration if not set.
@@ -267,7 +268,7 @@ func (s *State) CreateUser(user types.User) (*types.User, change.Change, error) 
 	c, err := s.updatePolicyManagerUsers()
 	if err != nil {
 		// Log the error but don't fail the user creation
-		return &user, change.Change{}, fmt.Errorf("failed to update policy manager after user creation: %w", err)
+		return &user, change.Change{}, fmt.Errorf("updating policy manager after user creation: %w", err)
 	}
 
 	// Even if the policy manager doesn't detect a filter change, SSH policies
@@ -279,7 +280,7 @@ func (s *State) CreateUser(user types.User) (*types.User, change.Change, error) 
 		c = change.PolicyChange()
 	}
 
-	log.Info().Str("user.name", user.Name).Msg("User created")
+	log.Info().Str(zf.UserName, user.Name).Msg("user created")
 
 	return &user, c, nil
 }
@@ -312,7 +313,7 @@ func (s *State) UpdateUser(userID types.UserID, updateFn func(*types.User) error
 	// Check if policy manager needs updating
 	c, err := s.updatePolicyManagerUsers()
 	if err != nil {
-		return user, change.Change{}, fmt.Errorf("failed to update policy manager after user update: %w", err)
+		return user, change.Change{}, fmt.Errorf("updating policy manager after user update: %w", err)
 	}
 
 	// TODO(kradalby): We might want to update nodestore with the user data
@@ -397,8 +398,7 @@ func (s *State) persistNodeToDB(node types.NodeView) (types.NodeView, change.Cha
 	_, exists := s.nodeStore.GetNode(node.ID())
 	if !exists {
 		log.Warn().
-			Uint64("node.id", node.ID().Uint64()).
-			Str("node.name", node.Hostname()).
+			EmbedObject(node).
 			Bool("is_ephemeral", node.IsEphemeral()).
 			Msg("Node no longer exists in NodeStore, skipping database persist to prevent race condition")
 
@@ -422,7 +422,7 @@ func (s *State) persistNodeToDB(node types.NodeView) (types.NodeView, change.Cha
 	// Check if policy manager needs updating
 	c, err := s.updatePolicyManagerNodes()
 	if err != nil {
-		return nodePtr.View(), change.Change{}, fmt.Errorf("failed to update policy manager after node save: %w", err)
+		return nodePtr.View(), change.Change{}, fmt.Errorf("updating policy manager after node save: %w", err)
 	}
 
 	if c.IsEmpty() {
@@ -459,7 +459,7 @@ func (s *State) DeleteNode(node types.NodeView) (change.Change, error) {
 	// Check if policy manager needs updating after node deletion
 	policyChange, err := s.updatePolicyManagerNodes()
 	if err != nil {
-		return change.Change{}, fmt.Errorf("failed to update policy manager after node deletion: %w", err)
+		return change.Change{}, fmt.Errorf("updating policy manager after node deletion: %w", err)
 	}
 
 	if !policyChange.IsEmpty() {
@@ -487,7 +487,7 @@ func (s *State) Connect(id types.NodeID) []change.Change {
 
 	c := []change.Change{change.NodeOnlineFor(node)}
 
-	log.Info().Uint64("node.id", id.Uint64()).Str("node.name", node.Hostname()).Msg("Node connected")
+	log.Info().EmbedObject(node).Msg("node connected")
 
 	// Use the node's current routes for primary route update
 	// AllApprovedRoutes() returns only the intersection of announced AND approved routes
@@ -515,7 +515,7 @@ func (s *State) Disconnect(id types.NodeID) ([]change.Change, error) {
 		return nil, fmt.Errorf("node not found: %d", id)
 	}
 
-	log.Info().Uint64("node.id", id.Uint64()).Str("node.name", node.Hostname()).Msg("Node disconnected")
+	log.Info().EmbedObject(node).Msg("node disconnected")
 
 	// Special error handling for disconnect - we log errors but continue
 	// because NodeStore is already updated and we need to notify peers
@@ -523,7 +523,7 @@ func (s *State) Disconnect(id types.NodeID) ([]change.Change, error) {
 	if err != nil {
 		// Log error but don't fail the disconnection - NodeStore is already updated
 		// and we need to send change notifications to peers
-		log.Error().Err(err).Uint64("node.id", id.Uint64()).Str("node.name", node.Hostname()).Msg("Failed to update last seen in database")
+		log.Error().Err(err).EmbedObject(node).Msg("failed to update last seen in database")
 
 		c = change.Change{}
 	}
@@ -797,7 +797,7 @@ func (s *State) BackfillNodeIPs() ([]string, error) {
 	if len(changes) > 0 {
 		nodes, err := s.db.ListNodes()
 		if err != nil {
-			return changes, fmt.Errorf("failed to refresh NodeStore after IP backfill: %w", err)
+			return changes, fmt.Errorf("refreshing NodeStore after IP backfill: %w", err)
 		}
 
 		for _, node := range nodes {
@@ -887,8 +887,7 @@ func (s *State) AutoApproveRoutes(nv types.NodeView) (change.Change, error) {
 	approved, changed := policy.ApproveRoutesWithPolicy(s.polMan, nv, nv.ApprovedRoutes().AsSlice(), nv.AnnouncedRoutes())
 	if changed {
 		log.Debug().
-			Uint64("node.id", nv.ID().Uint64()).
-			Str("node.name", nv.Hostname()).
+			EmbedObject(nv).
 			Strs("routes.announced", util.PrefixesToString(nv.AnnouncedRoutes())).
 			Strs("routes.approved.old", util.PrefixesToString(nv.ApprovedRoutes().AsSlice())).
 			Strs("routes.approved.new", util.PrefixesToString(approved)).
@@ -899,15 +898,14 @@ func (s *State) AutoApproveRoutes(nv types.NodeView) (change.Change, error) {
 		_, c, err := s.SetApprovedRoutes(nv.ID(), approved)
 		if err != nil {
 			log.Error().
-				Uint64("node.id", nv.ID().Uint64()).
-				Str("node.name", nv.Hostname()).
+				EmbedObject(nv).
 				Err(err).
 				Msg("Failed to persist auto-approved routes")
 
 			return change.Change{}, err
 		}
 
-		log.Info().Uint64("node.id", nv.ID().Uint64()).Str("node.name", nv.Hostname()).Strs("routes.approved", util.PrefixesToString(approved)).Msg("Routes approved")
+		log.Info().EmbedObject(nv).Strs(zf.RoutesApproved, util.PrefixesToString(approved)).Msg("routes approved")
 
 		return c, nil
 	}
@@ -1066,18 +1064,18 @@ func logHostinfoValidation(machineKey, nodeKey, username, hostname string, hosti
 	if hostinfo == nil {
 		log.Warn().
 			Caller().
-			Str("machine.key", machineKey).
-			Str("node.key", nodeKey).
-			Str("user.name", username).
-			Str("generated.hostname", hostname).
+			Str(zf.MachineKey, machineKey).
+			Str(zf.NodeKey, nodeKey).
+			Str(zf.UserName, username).
+			Str(zf.GeneratedHostname, hostname).
 			Msg("Registration had nil hostinfo, generated default hostname")
 	} else if hostinfo.Hostname == "" {
 		log.Warn().
 			Caller().
-			Str("machine.key", machineKey).
-			Str("node.key", nodeKey).
-			Str("user.name", username).
-			Str("generated.hostname", hostname).
+			Str(zf.MachineKey, machineKey).
+			Str(zf.NodeKey, nodeKey).
+			Str(zf.UserName, username).
+			Str(zf.GeneratedHostname, hostname).
 			Msg("Registration had empty hostname, generated default")
 	}
 }
@@ -1139,14 +1137,12 @@ func (s *State) applyAuthNodeUpdate(params authNodeUpdateParams) (types.NodeView
 	// Log the operation type
 	if params.IsConvertFromTag {
 		log.Info().
-			Str("node.name", params.ExistingNode.Hostname()).
-			Uint64("node.id", params.ExistingNode.ID().Uint64()).
+			EmbedObject(params.ExistingNode).
 			Strs("old.tags", params.ExistingNode.Tags().AsSlice()).
 			Msg("Converting tagged node to user-owned node")
 	} else {
 		log.Info().
-			Str("node.name", params.ExistingNode.Hostname()).
-			Uint64("node.id", params.ExistingNode.ID().Uint64()).
+			EmbedObject(params.ExistingNode).
 			Interface("hostinfo", params.RegEntry.Node.Hostinfo).
 			Msg("Updating existing node registration via reauth")
 	}
@@ -1246,7 +1242,7 @@ func (s *State) applyAuthNodeUpdate(params authNodeUpdateParams) (types.NodeView
 	_, err := hsdb.Write(s.db.DB, func(tx *gorm.DB) (*types.Node, error) {
 		err := tx.Omit("AuthKeyID", "AuthKey").Updates(updatedNodeView.AsStruct()).Error
 		if err != nil {
-			return nil, fmt.Errorf("failed to save node: %w", err)
+			return nil, fmt.Errorf("saving node: %w", err)
 		}
 
 		return nil, nil //nolint:nilnil // side-effect only write
@@ -1258,15 +1254,11 @@ func (s *State) applyAuthNodeUpdate(params authNodeUpdateParams) (types.NodeView
 	// Log completion
 	if params.IsConvertFromTag {
 		log.Trace().
-			Str("node.name", updatedNodeView.Hostname()).
-			Uint64("node.id", updatedNodeView.ID().Uint64()).
-			Str("node.key", updatedNodeView.NodeKey().ShortString()).
+			EmbedObject(updatedNodeView).
 			Msg("Tagged node converted to user-owned")
 	} else {
 		log.Trace().
-			Str("node.name", updatedNodeView.Hostname()).
-			Uint64("node.id", updatedNodeView.ID().Uint64()).
-			Str("node.key", updatedNodeView.NodeKey().ShortString()).
+			EmbedObject(updatedNodeView).
 			Msg("Node re-authorized")
 	}
 
@@ -1356,8 +1348,8 @@ func (s *State) createAndSaveNewNode(params newNodeParams) (types.NodeView, erro
 			nodeToRegister.Expiry = nil
 
 			log.Info().
-				Str("node.name", nodeToRegister.Hostname).
-				Strs("tags", nodeToRegister.Tags).
+				Str(zf.NodeName, nodeToRegister.Hostname).
+				Strs(zf.NodeTags, nodeToRegister.Tags).
 				Msg("approved advertise-tags during registration")
 		}
 	}
@@ -1381,7 +1373,7 @@ func (s *State) createAndSaveNewNode(params newNodeParams) (types.NodeView, erro
 	if nodeToRegister.GivenName == "" {
 		givenName, err := hsdb.EnsureUniqueGivenName(s.db.DB, nodeToRegister.Hostname)
 		if err != nil {
-			return types.NodeView{}, fmt.Errorf("failed to ensure unique given name: %w", err)
+			return types.NodeView{}, fmt.Errorf("ensuring unique given name: %w", err)
 		}
 
 		nodeToRegister.GivenName = givenName
@@ -1391,7 +1383,7 @@ func (s *State) createAndSaveNewNode(params newNodeParams) (types.NodeView, erro
 	savedNode, err := hsdb.Write(s.db.DB, func(tx *gorm.DB) (*types.Node, error) {
 		err := tx.Save(&nodeToRegister).Error
 		if err != nil {
-			return nil, fmt.Errorf("failed to save node: %w", err)
+			return nil, fmt.Errorf("saving node: %w", err)
 		}
 
 		if params.PreAuthKey != nil && !params.PreAuthKey.Reusable {
@@ -1443,23 +1435,23 @@ func (s *State) processReauthTags(
 	wasAuthKeyTagged := node.AuthKey != nil && node.AuthKey.IsTagged()
 
 	logEvent := log.Debug().
-		Uint64("node.id", uint64(node.ID)).
-		Str("node.name", node.Hostname).
-		Strs("request.tags", requestTags).
-		Strs("current.tags", node.Tags).
-		Bool("is.tagged", node.IsTagged()).
-		Bool("was.authkey.tagged", wasAuthKeyTagged)
-	logEvent.Msg("Processing RequestTags during reauth")
+		Uint64(zf.NodeID, uint64(node.ID)).
+		Str(zf.NodeName, node.Hostname).
+		Strs(zf.RequestTags, requestTags).
+		Strs(zf.CurrentTags, node.Tags).
+		Bool(zf.IsTagged, node.IsTagged()).
+		Bool(zf.WasAuthKeyTagged, wasAuthKeyTagged)
+	logEvent.Msg("processing RequestTags during reauth")
 
 	// Empty RequestTags means untag node (transition to user-owned)
 	if len(requestTags) == 0 {
 		if node.IsTagged() {
 			log.Info().
-				Uint64("node.id", uint64(node.ID)).
-				Str("node.name", node.Hostname).
-				Strs("removed.tags", node.Tags).
-				Str("user.name", user.Name).
-				Bool("was.authkey.tagged", wasAuthKeyTagged).
+				Uint64(zf.NodeID, uint64(node.ID)).
+				Str(zf.NodeName, node.Hostname).
+				Strs(zf.RemovedTags, node.Tags).
+				Str(zf.UserName, user.Name).
+				Bool(zf.WasAuthKeyTagged, wasAuthKeyTagged).
 				Msg("Reauth: removing all tags, returning node ownership to user")
 
 			node.Tags = []string{}
@@ -1483,9 +1475,9 @@ func (s *State) processReauthTags(
 
 	if len(rejectedTags) > 0 {
 		log.Warn().
-			Uint64("node.id", uint64(node.ID)).
-			Str("node.name", node.Hostname).
-			Strs("rejected.tags", rejectedTags).
+			Uint64(zf.NodeID, uint64(node.ID)).
+			Str(zf.NodeName, node.Hostname).
+			Strs(zf.RejectedTags, rejectedTags).
 			Msg("Reauth: requested tags are not permitted")
 
 		return rejectedTags
@@ -1501,17 +1493,17 @@ func (s *State) processReauthTags(
 		// Note: UserID is preserved as "created by" tracking, consistent with SetNodeTags
 		if !wasTagged {
 			log.Info().
-				Uint64("node.id", uint64(node.ID)).
-				Str("node.name", node.Hostname).
-				Strs("new.tags", approvedTags).
-				Str("old.user", user.Name).
+				Uint64(zf.NodeID, uint64(node.ID)).
+				Str(zf.NodeName, node.Hostname).
+				Strs(zf.NewTags, approvedTags).
+				Str(zf.OldUser, user.Name).
 				Msg("Reauth: applying tags, transferring node to tagged-devices")
 		} else {
 			log.Info().
-				Uint64("node.id", uint64(node.ID)).
-				Str("node.name", node.Hostname).
-				Strs("old.tags", oldTags).
-				Strs("new.tags", approvedTags).
+				Uint64(zf.NodeID, uint64(node.ID)).
+				Str(zf.NodeName, node.Hostname).
+				Strs(zf.OldTags, oldTags).
+				Strs(zf.NewTags, approvedTags).
 				Msg("Reauth: updating tags on already-tagged node")
 		}
 	}
@@ -1535,7 +1527,7 @@ func (s *State) HandleNodeFromAuthPath(
 	// Get the user
 	user, err := s.db.GetUserByID(userID)
 	if err != nil {
-		return types.NodeView{}, change.Change{}, fmt.Errorf("failed to find user: %w", err)
+		return types.NodeView{}, change.Change{}, fmt.Errorf("finding user: %w", err)
 	}
 
 	// Ensure we have a valid hostname from the registration cache entry
@@ -1572,10 +1564,10 @@ func (s *State) HandleNodeFromAuthPath(
 
 	// Create logger with common fields for all auth operations
 	logger := log.With().
-		Str("registration_id", registrationID.String()).
-		Str("user.name", user.Name).
-		Str("machine.key", machineKey.ShortString()).
-		Str("method", registrationMethod).
+		Str(zf.RegistrationID, registrationID.String()).
+		Str(zf.UserName, user.Name).
+		Str(zf.MachineKey, machineKey.ShortString()).
+		Str(zf.Method, registrationMethod).
 		Logger()
 
 	// Common params for update operations
@@ -1609,9 +1601,9 @@ func (s *State) HandleNodeFromAuthPath(
 		oldUser := existingNodeAnyUser.User()
 
 		logger.Info().
-			Str("existing.node.name", existingNodeAnyUser.Hostname()).
-			Uint64("existing.node.id", existingNodeAnyUser.ID().Uint64()).
-			Str("old.user", oldUser.Name()).
+			Str(zf.ExistingNodeName, existingNodeAnyUser.Hostname()).
+			Uint64(zf.ExistingNodeID, existingNodeAnyUser.ID().Uint64()).
+			Str(zf.OldUser, oldUser.Name()).
 			Msg("Creating new node for different user (same machine key exists for another user)")
 
 		finalNode, err = s.createNewNodeFromAuth(
@@ -1640,12 +1632,12 @@ func (s *State) HandleNodeFromAuthPath(
 	// Update policy managers
 	usersChange, err := s.updatePolicyManagerUsers()
 	if err != nil {
-		return finalNode, change.NodeAdded(finalNode.ID()), fmt.Errorf("failed to update policy manager users: %w", err)
+		return finalNode, change.NodeAdded(finalNode.ID()), fmt.Errorf("updating policy manager users: %w", err)
 	}
 
 	nodesChange, err := s.updatePolicyManagerNodes()
 	if err != nil {
-		return finalNode, change.NodeAdded(finalNode.ID()), fmt.Errorf("failed to update policy manager nodes: %w", err)
+		return finalNode, change.NodeAdded(finalNode.ID()), fmt.Errorf("updating policy manager nodes: %w", err)
 	}
 
 	var c change.Change
@@ -1748,16 +1740,16 @@ func (s *State) HandleNodeFromPreAuthKey(
 		// containers that run "tailscale up --authkey=KEY" on every restart.
 		log.Debug().
 			Caller().
-			Uint64("node.id", existingNodeSameUser.ID().Uint64()).
-			Str("node.name", existingNodeSameUser.Hostname()).
-			Str("machine.key", machineKey.ShortString()).
-			Str("node.key.existing", existingNodeSameUser.NodeKey().ShortString()).
-			Str("node.key.request", regReq.NodeKey.ShortString()).
-			Uint64("authkey.id", pak.ID).
-			Bool("authkey.used", pak.Used).
-			Bool("authkey.expired", pak.Expiration != nil && pak.Expiration.Before(time.Now())).
-			Bool("authkey.reusable", pak.Reusable).
-			Bool("nodekey.rotation", isNodeKeyRotation).
+			Uint64(zf.NodeID, existingNodeSameUser.ID().Uint64()).
+			Str(zf.NodeName, existingNodeSameUser.Hostname()).
+			Str(zf.MachineKey, machineKey.ShortString()).
+			Str(zf.NodeKeyExisting, existingNodeSameUser.NodeKey().ShortString()).
+			Str(zf.NodeKeyRequest, regReq.NodeKey.ShortString()).
+			Uint64(zf.AuthKeyID, pak.ID).
+			Bool(zf.AuthKeyUsed, pak.Used).
+			Bool(zf.AuthKeyExpired, pak.Expiration != nil && pak.Expiration.Before(time.Now())).
+			Bool(zf.AuthKeyReusable, pak.Reusable).
+			Bool(zf.NodeKeyRotation, isNodeKeyRotation).
 			Msg("Existing node re-registering with same NodeKey and auth key, skipping validation")
 	} else {
 		// New node or NodeKey rotation: require valid auth key.
@@ -1788,10 +1780,10 @@ func (s *State) HandleNodeFromPreAuthKey(
 
 	log.Debug().
 		Caller().
-		Str("node.name", hostname).
-		Str("machine.key", machineKey.ShortString()).
-		Str("node.key", regReq.NodeKey.ShortString()).
-		Str("user.name", pakUsername()).
+		Str(zf.NodeName, hostname).
+		Str(zf.MachineKey, machineKey.ShortString()).
+		Str(zf.NodeKey, regReq.NodeKey.ShortString()).
+		Str(zf.UserName, pakUsername()).
 		Msg("Registering node with pre-auth key")
 
 	var finalNode types.NodeView
@@ -1801,11 +1793,11 @@ func (s *State) HandleNodeFromPreAuthKey(
 	if existsSameUser && existingNodeSameUser.Valid() {
 		log.Trace().
 			Caller().
-			Str("node.name", existingNodeSameUser.Hostname()).
-			Uint64("node.id", existingNodeSameUser.ID().Uint64()).
-			Str("machine.key", machineKey.ShortString()).
-			Str("node.key", existingNodeSameUser.NodeKey().ShortString()).
-			Str("user.name", pakUsername()).
+			Str(zf.NodeName, existingNodeSameUser.Hostname()).
+			Uint64(zf.NodeID, existingNodeSameUser.ID().Uint64()).
+			Str(zf.MachineKey, machineKey.ShortString()).
+			Str(zf.NodeKey, existingNodeSameUser.NodeKey().ShortString()).
+			Str(zf.UserName, pakUsername()).
 			Msg("Node re-registering with existing machine key and user, updating in place")
 
 		// Update existing node - NodeStore first, then database
@@ -1848,7 +1840,7 @@ func (s *State) HandleNodeFromPreAuthKey(
 			// Omit AuthKeyID/AuthKey to prevent stale PreAuthKey references from causing FK errors.
 			err := tx.Omit("AuthKeyID", "AuthKey").Updates(updatedNodeView.AsStruct()).Error
 			if err != nil {
-				return nil, fmt.Errorf("failed to save node: %w", err)
+				return nil, fmt.Errorf("saving node: %w", err)
 			}
 
 			if !pak.Reusable {
@@ -1866,11 +1858,11 @@ func (s *State) HandleNodeFromPreAuthKey(
 
 		log.Trace().
 			Caller().
-			Str("node.name", updatedNodeView.Hostname()).
-			Uint64("node.id", updatedNodeView.ID().Uint64()).
-			Str("machine.key", machineKey.ShortString()).
-			Str("node.key", updatedNodeView.NodeKey().ShortString()).
-			Str("user.name", pakUsername()).
+			Str(zf.NodeName, updatedNodeView.Hostname()).
+			Uint64(zf.NodeID, updatedNodeView.ID().Uint64()).
+			Str(zf.MachineKey, machineKey.ShortString()).
+			Str(zf.NodeKey, updatedNodeView.NodeKey().ShortString()).
+			Str(zf.UserName, pakUsername()).
 			Msg("Node re-authorized")
 
 		finalNode = updatedNodeView
@@ -1888,11 +1880,11 @@ func (s *State) HandleNodeFromPreAuthKey(
 			oldUser := existingNodeAnyUser.User()
 			log.Info().
 				Caller().
-				Str("existing.node.name", existingNodeAnyUser.Hostname()).
-				Uint64("existing.node.id", existingNodeAnyUser.ID().Uint64()).
-				Str("machine.key", machineKey.ShortString()).
-				Str("old.user", oldUser.Name()).
-				Str("new.user", pakUsername()).
+				Str(zf.ExistingNodeName, existingNodeAnyUser.Hostname()).
+				Uint64(zf.ExistingNodeID, existingNodeAnyUser.ID().Uint64()).
+				Str(zf.MachineKey, machineKey.ShortString()).
+				Str(zf.OldUser, oldUser.Name()).
+				Str(zf.NewUser, pakUsername()).
 				Msg("Creating new node for different user (same machine key exists for another user)")
 		}
 
@@ -1930,12 +1922,12 @@ func (s *State) HandleNodeFromPreAuthKey(
 	// Update policy managers
 	usersChange, err := s.updatePolicyManagerUsers()
 	if err != nil {
-		return finalNode, change.NodeAdded(finalNode.ID()), fmt.Errorf("failed to update policy manager users: %w", err)
+		return finalNode, change.NodeAdded(finalNode.ID()), fmt.Errorf("updating policy manager users: %w", err)
 	}
 
 	nodesChange, err := s.updatePolicyManagerNodes()
 	if err != nil {
-		return finalNode, change.NodeAdded(finalNode.ID()), fmt.Errorf("failed to update policy manager nodes: %w", err)
+		return finalNode, change.NodeAdded(finalNode.ID()), fmt.Errorf("updating policy manager nodes: %w", err)
 	}
 
 	var c change.Change
@@ -1960,14 +1952,14 @@ func (s *State) updatePolicyManagerUsers() (change.Change, error) {
 		return change.Change{}, fmt.Errorf("listing users for policy update: %w", err)
 	}
 
-	log.Debug().Caller().Int("user.count", len(users)).Msg("Policy manager user update initiated because user list modification detected")
+	log.Debug().Caller().Int("user.count", len(users)).Msg("policy manager user update initiated because user list modification detected")
 
 	changed, err := s.polMan.SetUsers(users)
 	if err != nil {
 		return change.Change{}, fmt.Errorf("updating policy manager users: %w", err)
 	}
 
-	log.Debug().Caller().Bool("policy.changed", changed).Msg("Policy manager user update completed because SetUsers operation finished")
+	log.Debug().Caller().Bool("policy.changed", changed).Msg("policy manager user update completed because SetUsers operation finished")
 
 	if changed {
 		return change.PolicyChange(), nil
@@ -2034,10 +2026,10 @@ func (s *State) autoApproveNodes() ([]change.Change, error) {
 			approved, changed := policy.ApproveRoutesWithPolicy(s.polMan, nv, nv.ApprovedRoutes().AsSlice(), nv.AnnouncedRoutes())
 			if changed {
 				log.Debug().
-					Uint64("node.id", nv.ID().Uint64()).
-					Str("node.name", nv.Hostname()).
-					Strs("routes.approved.old", util.PrefixesToString(nv.ApprovedRoutes().AsSlice())).
-					Strs("routes.approved.new", util.PrefixesToString(approved)).
+					Uint64(zf.NodeID, nv.ID().Uint64()).
+					Str(zf.NodeName, nv.Hostname()).
+					Strs(zf.RoutesApprovedOld, util.PrefixesToString(nv.ApprovedRoutes().AsSlice())).
+					Strs(zf.RoutesApprovedNew, util.PrefixesToString(approved)).
 					Msg("Routes auto-approved by policy")
 
 				_, c, err := s.SetApprovedRoutes(nv.ID(), approved)
@@ -2074,7 +2066,7 @@ func (s *State) autoApproveNodes() ([]change.Change, error) {
 func (s *State) UpdateNodeFromMapRequest(id types.NodeID, req tailcfg.MapRequest) (change.Change, error) {
 	log.Trace().
 		Caller().
-		Uint64("node.id", id.Uint64()).
+		Uint64(zf.NodeID, id.Uint64()).
 		Interface("request", req).
 		Msg("Processing MapRequest for node")
 
@@ -2144,11 +2136,11 @@ func (s *State) UpdateNodeFromMapRequest(id types.NodeID, req tailcfg.MapRequest
 				if routesChanged(currentNode.View(), hi) {
 					log.Debug().
 						Caller().
-						Uint64("node.id", id.Uint64()).
-						Strs("oldAnnouncedRoutes", util.PrefixesToString(currentNode.AnnouncedRoutes())).
-						Strs("newAnnouncedRoutes", util.PrefixesToString(hi.RoutableIPs)).
-						Strs("approvedRoutes", util.PrefixesToString(currentNode.ApprovedRoutes)).
-						Bool("routeChange", routeChange).
+						Uint64(zf.NodeID, id.Uint64()).
+						Strs(zf.OldAnnouncedRoutes, util.PrefixesToString(currentNode.AnnouncedRoutes())).
+						Strs(zf.NewAnnouncedRoutes, util.PrefixesToString(hi.RoutableIPs)).
+						Strs(zf.ApprovedRoutes, util.PrefixesToString(currentNode.ApprovedRoutes)).
+						Bool(zf.RouteChanged, routeChange).
 						Msg("announced routes changed but approved routes did not")
 				}
 			}
@@ -2175,10 +2167,10 @@ func (s *State) UpdateNodeFromMapRequest(id types.NodeID, req tailcfg.MapRequest
 				// This fixes the bug where routes weren't properly cleared when
 				// auto-approvers were removed from the policy.
 				log.Info().
-					Uint64("node.id", id.Uint64()).
-					Strs("oldApprovedRoutes", util.PrefixesToString(currentNode.ApprovedRoutes)).
-					Strs("newApprovedRoutes", util.PrefixesToString(autoApprovedRoutes)).
-					Bool("routeChanged", routeChange).
+					Uint64(zf.NodeID, id.Uint64()).
+					Strs(zf.OldApprovedRoutes, util.PrefixesToString(currentNode.ApprovedRoutes)).
+					Strs(zf.NewApprovedRoutes, util.PrefixesToString(autoApprovedRoutes)).
+					Bool(zf.RouteChanged, routeChange).
 					Msg("applying route approval results")
 			}
 		}
@@ -2190,8 +2182,8 @@ func (s *State) UpdateNodeFromMapRequest(id types.NodeID, req tailcfg.MapRequest
 
 	if routeChange {
 		log.Debug().
-			Uint64("node.id", id.Uint64()).
-			Strs("autoApprovedRoutes", util.PrefixesToString(autoApprovedRoutes)).
+			Uint64(zf.NodeID, id.Uint64()).
+			Strs(zf.AutoApprovedRoutes, util.PrefixesToString(autoApprovedRoutes)).
 			Msg("Persisting auto-approved routes from MapRequest")
 
 		// SetApprovedRoutes will update both database and PrimaryRoutes table
@@ -2319,17 +2311,17 @@ func (s *State) maybeUpdateNodeRoutes(
 
 	log.Debug().
 		Caller().
-		Uint64("node.id", id.Uint64()).
+		Uint64(zf.NodeID, id.Uint64()).
 		Msg("updating routes because announced routes changed but approved routes did not")
 
 	// SetNodeRoutes sets the active/distributed routes using AllApprovedRoutes()
 	// which returns only the intersection of announced AND approved routes.
 	log.Debug().
 		Caller().
-		Uint64("node.id", id.Uint64()).
-		Strs("announcedRoutes", util.PrefixesToString(node.AnnouncedRoutes())).
-		Strs("approvedRoutes", util.PrefixesToString(node.ApprovedRoutes().AsSlice())).
-		Strs("allApprovedRoutes", util.PrefixesToString(node.AllApprovedRoutes())).
+		Uint64(zf.NodeID, id.Uint64()).
+		Strs(zf.RoutesAnnounced, util.PrefixesToString(node.AnnouncedRoutes())).
+		Strs(zf.ApprovedRoutes, util.PrefixesToString(node.ApprovedRoutes().AsSlice())).
+		Strs(zf.AllApprovedRoutes, util.PrefixesToString(node.AllApprovedRoutes())).
 		Msg("updating node routes for distribution")
 
 	return s.SetNodeRoutes(id, node.AllApprovedRoutes()...)

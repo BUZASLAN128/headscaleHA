@@ -29,6 +29,7 @@ import (
 	"github.com/juanfont/headscale/hscontrol/state"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/util"
+	"github.com/juanfont/headscale/hscontrol/util/zlog/zf"
 )
 
 type headscaleV1APIServer struct { // v1.HeadscaleServiceServer
@@ -54,7 +55,7 @@ func (api headscaleV1APIServer) CreateUser(
 	}
 	user, policyChanged, err := api.h.state.CreateUser(newUser)
 	if err != nil {
-		return nil, status.Errorf(codes.Internal, "failed to create user: %s", err)
+		return nil, status.Errorf(codes.Internal, "creating user: %s", err)
 	}
 
 	// CreateUser returns a policy change response if the user creation affected policy.
@@ -235,16 +236,16 @@ func (api headscaleV1APIServer) RegisterNode(
 	// Generate ephemeral registration key for tracking this registration flow in logs
 	registrationKey, err := util.GenerateRegistrationKey()
 	if err != nil {
-		log.Warn().Err(err).Msg("Failed to generate registration key")
+		log.Warn().Err(err).Msg("failed to generate registration key")
 		registrationKey = "" // Continue without key if generation fails
 	}
 
 	log.Trace().
 		Caller().
-		Str("user", request.GetUser()).
-		Str("registration_id", request.GetKey()).
-		Str("registration_key", registrationKey).
-		Msg("Registering node")
+		Str(zf.UserName, request.GetUser()).
+		Str(zf.RegistrationID, request.GetKey()).
+		Str(zf.RegistrationKey, registrationKey).
+		Msg("registering node")
 
 	registrationId, err := types.RegistrationIDFromString(request.GetKey())
 	if err != nil {
@@ -264,17 +265,16 @@ func (api headscaleV1APIServer) RegisterNode(
 	)
 	if err != nil {
 		log.Error().
-			Str("registration_key", registrationKey).
+			Str(zf.RegistrationKey, registrationKey).
 			Err(err).
-			Msg("Failed to register node")
+			Msg("failed to register node")
 		return nil, err
 	}
 
 	log.Info().
-		Str("registration_key", registrationKey).
-		Str("node_id", fmt.Sprintf("%d", node.ID())).
-		Str("hostname", node.Hostname()).
-		Msg("Node registered successfully")
+		Str(zf.RegistrationKey, registrationKey).
+		EmbedObject(node).
+		Msg("node registered successfully")
 
 	// This is a bit of a back and forth, but we have a bit of a chicken and egg
 	// dependency here.
@@ -355,9 +355,9 @@ func (api headscaleV1APIServer) SetTags(
 
 	log.Trace().
 		Caller().
-		Str("node", node.Hostname()).
+		EmbedObject(node).
 		Strs("tags", request.GetTags()).
-		Msg("Changing tags of node")
+		Msg("changing tags of node")
 
 	return &v1.SetTagsResponse{Node: node.Proto()}, nil
 }
@@ -368,7 +368,7 @@ func (api headscaleV1APIServer) SetApprovedRoutes(
 ) (*v1.SetApprovedRoutesResponse, error) {
 	log.Debug().
 		Caller().
-		Uint64("node.id", request.GetNodeId()).
+		Uint64(zf.NodeID, request.GetNodeId()).
 		Strs("requestedRoutes", request.GetRoutes()).
 		Msg("gRPC SetApprovedRoutes called")
 
@@ -406,7 +406,7 @@ func (api headscaleV1APIServer) SetApprovedRoutes(
 
 	log.Debug().
 		Caller().
-		Uint64("node.id", node.ID().Uint64()).
+		EmbedObject(node).
 		Strs("approvedRoutes", util.PrefixesToString(node.ApprovedRoutes().AsSlice())).
 		Strs("primaryRoutes", util.PrefixesToString(primaryRoutes)).
 		Strs("finalSubnetRoutes", proto.SubnetRoutes).
@@ -423,7 +423,7 @@ func validateTag(tag string) error {
 		return errors.New("tag should be lowercase")
 	}
 	if len(strings.Fields(tag)) > 1 {
-		return errors.New("tag should not contains space")
+		return errors.New("tags must not contain spaces")
 	}
 	return nil
 }
@@ -466,8 +466,8 @@ func (api headscaleV1APIServer) ExpireNode(
 
 	log.Trace().
 		Caller().
-		Str("node", node.Hostname()).
-		Time("expiry", *node.AsStruct().Expiry).
+		EmbedObject(node).
+		Time(zf.ExpiresAt, *node.AsStruct().Expiry).
 		Msg("node expired")
 
 	return &v1.ExpireNodeResponse{Node: node.Proto()}, nil
@@ -487,8 +487,8 @@ func (api headscaleV1APIServer) RenameNode(
 
 	log.Trace().
 		Caller().
-		Str("node", node.Hostname()).
-		Str("new_name", request.GetNewName()).
+		EmbedObject(node).
+		Str(zf.NewName, request.GetNewName()).
 		Msg("node renamed")
 
 	return &v1.RenameNodeResponse{Node: node.Proto()}, nil
@@ -546,7 +546,7 @@ func (api headscaleV1APIServer) BackfillNodeIPs(
 	ctx context.Context,
 	request *v1.BackfillNodeIPsRequest,
 ) (*v1.BackfillNodeIPsResponse, error) {
-	log.Trace().Caller().Msg("Backfill called")
+	log.Trace().Caller().Msg("backfill called")
 
 	if !request.Confirmed {
 		return nil, errors.New("not confirmed, aborting")
@@ -817,13 +817,13 @@ func (api headscaleV1APIServer) Health(
 	response := &v1.HealthResponse{}
 
 	if err := api.h.state.PingDB(ctx); err != nil {
-		healthErr = fmt.Errorf("database ping failed: %w", err)
+		healthErr = fmt.Errorf("pinging database: %w", err)
 	} else {
 		response.DatabaseConnectivity = true
 	}
 
 	if healthErr != nil {
-		log.Error().Err(healthErr).Msg("Health check failed")
+		log.Error().Err(healthErr).Msg("health check failed")
 	}
 
 	return response, healthErr

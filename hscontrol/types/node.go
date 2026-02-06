@@ -13,6 +13,8 @@ import (
 	v1 "github.com/juanfont/headscale/gen/go/headscale/v1"
 	"github.com/juanfont/headscale/hscontrol/policy/matcher"
 	"github.com/juanfont/headscale/hscontrol/util"
+	"github.com/juanfont/headscale/hscontrol/util/zlog/zf"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"go4.org/netipx"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -23,8 +25,8 @@ import (
 )
 
 var (
-	ErrNodeAddressesInvalid = errors.New("failed to parse node addresses")
-	ErrHostnameTooLong      = errors.New("hostname too long, cannot except 255 ASCII chars")
+	ErrNodeAddressesInvalid = errors.New("parsing node addresses")
+	ErrHostnameTooLong      = errors.New("hostname too long, cannot accept more than 255 ASCII chars")
 	ErrNodeHasNoGivenName   = errors.New("node has no given name")
 	ErrNodeUserHasNoName    = errors.New("node user has no name")
 	ErrCannotRemoveAllTags  = errors.New("cannot remove all tags from node")
@@ -415,7 +417,7 @@ func (node *Node) Proto() *v1.Node {
 
 func (node *Node) GetFQDN(baseDomain string) (string, error) {
 	if node.GivenName == "" {
-		return "", fmt.Errorf("failed to create valid FQDN: %w", ErrNodeHasNoGivenName)
+		return "", fmt.Errorf("creating valid FQDN: %w", ErrNodeHasNoGivenName)
 	}
 
 	hostname := node.GivenName
@@ -430,7 +432,7 @@ func (node *Node) GetFQDN(baseDomain string) (string, error) {
 
 	if len(hostname) > MaxHostnameLength {
 		return "", fmt.Errorf(
-			"failed to create valid FQDN (%s): %w",
+			"creating valid FQDN (%s): %w",
 			hostname,
 			ErrHostnameTooLong,
 		)
@@ -485,6 +487,36 @@ func (node *Node) AllApprovedRoutes() []netip.Prefix {
 
 func (node *Node) String() string {
 	return node.Hostname
+}
+
+// MarshalZerologObject implements zerolog.LogObjectMarshaler for safe logging.
+// This method is used with zerolog's EmbedObject() for flat field embedding
+// or Object() for nested logging when multiple nodes are logged.
+func (node *Node) MarshalZerologObject(e *zerolog.Event) {
+	if node == nil {
+		return
+	}
+
+	e.Uint64(zf.NodeID, node.ID.Uint64())
+	e.Str(zf.NodeName, node.Hostname)
+	e.Str(zf.MachineKey, node.MachineKey.ShortString())
+	e.Str(zf.NodeKey, node.NodeKey.ShortString())
+	e.Bool(zf.NodeIsTagged, node.IsTagged())
+	e.Bool(zf.NodeExpired, node.IsExpired())
+
+	if node.IsOnline != nil {
+		e.Bool(zf.NodeOnline, *node.IsOnline)
+	}
+
+	if len(node.Tags) > 0 {
+		e.Strs(zf.NodeTags, node.Tags)
+	}
+
+	if node.User != nil {
+		e.Str(zf.UserName, node.User.Username())
+	} else if node.UserID != nil {
+		e.Uint(zf.UserID, *node.UserID)
+	}
 }
 
 // PeerChangeFromMapRequest takes a MapRequest and compares it to the node
@@ -719,6 +751,16 @@ func (node Node) DebugString() string {
 	return sb.String()
 }
 
+// MarshalZerologObject implements zerolog.LogObjectMarshaler for NodeView.
+// This delegates to the underlying Node's implementation.
+func (nv NodeView) MarshalZerologObject(e *zerolog.Event) {
+	if !nv.Valid() {
+		return
+	}
+
+	nv.ж.MarshalZerologObject(e)
+}
+
 // Owner returns the owner for display purposes.
 // For tagged nodes, returns TaggedDevices. For user-owned nodes, returns the user.
 func (nv NodeView) Owner() UserView {
@@ -855,7 +897,7 @@ func (nv NodeView) PeerChangeFromMapRequest(req tailcfg.MapRequest) tailcfg.Peer
 // GetFQDN returns the fully qualified domain name for the node.
 func (nv NodeView) GetFQDN(baseDomain string) (string, error) {
 	if !nv.Valid() {
-		return "", errors.New("failed to create valid FQDN: node view is invalid")
+		return "", errors.New("creating valid FQDN: node view is invalid")
 	}
 
 	return nv.ж.GetFQDN(baseDomain)

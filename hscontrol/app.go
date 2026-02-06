@@ -121,7 +121,7 @@ func NewHeadscale(cfg *types.Config) (*Headscale, error) {
 
 	noisePrivateKey, err := readOrCreatePrivateKey(cfg.NoisePrivateKeyPath)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read or create Noise protocol private key: %w", err)
+		return nil, fmt.Errorf("reading or creating Noise protocol private key: %w", err)
 	}
 
 	s, err := state.NewState(cfg)
@@ -140,19 +140,19 @@ func NewHeadscale(cfg *types.Config) (*Headscale, error) {
 	ephemeralGC := db.NewEphemeralGarbageCollector(func(ni types.NodeID) {
 		node, ok := app.state.GetNodeByID(ni)
 		if !ok {
-			log.Error().Uint64("node.id", ni.Uint64()).Msg("Ephemeral node deletion failed")
-			log.Debug().Caller().Uint64("node.id", ni.Uint64()).Msg("Ephemeral node deletion failed because node not found in NodeStore")
+			log.Error().Uint64("node.id", ni.Uint64()).Msg("ephemeral node deletion failed")
+			log.Debug().Caller().Uint64("node.id", ni.Uint64()).Msg("ephemeral node deletion failed because node not found in NodeStore")
 			return
 		}
 
 		policyChanged, err := app.state.DeleteNode(node)
 		if err != nil {
-			log.Error().Err(err).Uint64("node.id", ni.Uint64()).Str("node.name", node.Hostname()).Msg("Ephemeral node deletion failed")
+			log.Error().Err(err).EmbedObject(node).Msg("ephemeral node deletion failed")
 			return
 		}
 
 		app.Change(policyChanged)
-		log.Debug().Caller().Uint64("node.id", ni.Uint64()).Str("node.name", node.Hostname()).Msg("Ephemeral node deleted because garbage collection timeout reached")
+		log.Debug().Caller().EmbedObject(node).Msg("ephemeral node deleted because garbage collection timeout reached")
 	})
 	app.ephemeralGC = ephemeralGC
 
@@ -206,7 +206,7 @@ func NewHeadscale(cfg *types.Config) (*Headscale, error) {
 	if cfg.DERP.ServerEnabled {
 		derpServerKey, err := readOrCreatePrivateKey(cfg.DERP.ServerPrivateKeyPath)
 		if err != nil {
-			return nil, fmt.Errorf("failed to read or create DERP server private key: %w", err)
+			return nil, fmt.Errorf("reading or creating DERP server private key: %w", err)
 		}
 
 		if derpServerKey.Equal(*noisePrivateKey) {
@@ -286,7 +286,7 @@ func (h *Headscale) scheduledTasks(ctx context.Context) {
 			}
 
 		case <-derpTickerChan:
-			log.Info().Msg("Fetching DERPMap updates")
+			log.Info().Msg("fetching DERPMap updates")
 			derpMap, err := backoff.Retry(ctx, func() (*tailcfg.DERPMap, error) {
 				derpMap, err := derp.GetDERPMap(h.cfg.DERP)
 				if err != nil {
@@ -339,7 +339,7 @@ func (h *Headscale) grpcAuthenticationInterceptor(ctx context.Context,
 	if !ok {
 		return ctx, status.Errorf(
 			codes.InvalidArgument,
-			"Retrieving metadata is failed",
+			"retrieving metadata",
 		)
 	}
 
@@ -347,7 +347,7 @@ func (h *Headscale) grpcAuthenticationInterceptor(ctx context.Context,
 	if !ok {
 		return ctx, status.Errorf(
 			codes.Unauthenticated,
-			"Authorization token is not supplied",
+			"authorization token not supplied",
 		)
 	}
 
@@ -362,7 +362,7 @@ func (h *Headscale) grpcAuthenticationInterceptor(ctx context.Context,
 
 	valid, err := h.state.ValidateAPIKey(strings.TrimPrefix(token, AuthPrefix))
 	if err != nil {
-		return ctx, status.Error(codes.Internal, "failed to validate token")
+		return ctx, status.Error(codes.Internal, "validating token")
 	}
 
 	if !valid {
@@ -506,7 +506,7 @@ func (h *Headscale) Serve() error {
 	}
 
 	versionInfo := types.GetVersionInfo()
-	log.Info().Str("version", versionInfo.Version).Str("commit", versionInfo.Commit).Msg("Starting Headscale")
+	log.Info().Str("version", versionInfo.Version).Str("commit", versionInfo.Commit).Msg("starting headscale")
 	log.Info().
 		Str("minimum_version", capver.TailscaleVersion(capver.MinSupportedCapabilityVersion)).
 		Msg("Clients with a lower minimum version will be rejected")
@@ -526,7 +526,7 @@ func (h *Headscale) Serve() error {
 
 	derpMap, err := derp.GetDERPMap(h.cfg.DERP)
 	if err != nil {
-		return fmt.Errorf("failed to get DERPMap: %w", err)
+		return fmt.Errorf("getting DERPMap: %w", err)
 	}
 
 	if h.cfg.DERP.ServerEnabled && h.cfg.DERP.AutomaticallyAddEmbeddedDerpRegion {
@@ -586,7 +586,7 @@ func (h *Headscale) Serve() error {
 
 	err = h.ensureUnixSocketIsAbsent()
 	if err != nil {
-		return fmt.Errorf("unable to remove old socket file: %w", err)
+		return fmt.Errorf("removing old socket file: %w", err)
 	}
 
 	socketDir := filepath.Dir(h.cfg.UnixSocket)
@@ -597,12 +597,12 @@ func (h *Headscale) Serve() error {
 
 	socketListener, err := net.Listen("unix", h.cfg.UnixSocket)
 	if err != nil {
-		return fmt.Errorf("failed to set up gRPC socket: %w", err)
+		return fmt.Errorf("setting up gRPC socket: %w", err)
 	}
 
 	// Change socket permissions
 	if err := os.Chmod(h.cfg.UnixSocket, h.cfg.UnixSocketPermission); err != nil {
-		return fmt.Errorf("failed change permission of gRPC socket: %w", err)
+		return fmt.Errorf("changing gRPC socket permission: %w", err)
 	}
 
 	grpcGatewayMux := grpcRuntime.NewServeMux()
@@ -662,7 +662,7 @@ func (h *Headscale) Serve() error {
 	var grpcServer *grpc.Server
 	var grpcListener net.Listener
 	if tlsConfig != nil || h.cfg.GRPCAllowInsecure {
-		log.Info().Msgf("Enabling remote gRPC at %s", h.cfg.GRPCAddr)
+		log.Info().Msgf("enabling remote gRPC at %s", h.cfg.GRPCAddr)
 
 		grpcOptions := []grpc.ServerOption{
 			grpc.ChainUnaryInterceptor(
@@ -687,7 +687,7 @@ func (h *Headscale) Serve() error {
 
 		grpcListener, err = net.Listen("tcp", h.cfg.GRPCAddr)
 		if err != nil {
-			return fmt.Errorf("failed to bind to TCP address: %w", err)
+			return fmt.Errorf("binding to TCP address: %w", err)
 		}
 
 		errorGroup.Go(func() error { return grpcServer.Serve(grpcListener) })
@@ -722,7 +722,7 @@ func (h *Headscale) Serve() error {
 		httpListener, err = net.Listen("tcp", h.cfg.Addr)
 	}
 	if err != nil {
-		return fmt.Errorf("failed to bind to TCP address: %w", err)
+		return fmt.Errorf("binding to TCP address: %w", err)
 	}
 
 	errorGroup.Go(func() error { return httpServer.Serve(httpListener) })
@@ -738,7 +738,7 @@ func (h *Headscale) Serve() error {
 	if h.cfg.MetricsAddr != "" {
 		debugHTTPListener, err = (&net.ListenConfig{}).Listen(ctx, "tcp", h.cfg.MetricsAddr)
 		if err != nil {
-			return fmt.Errorf("failed to bind to TCP address: %w", err)
+			return fmt.Errorf("binding to TCP address: %w", err)
 		}
 
 		debugHTTPServer = h.debugHTTPServer()
@@ -940,13 +940,13 @@ func (h *Headscale) getTLSSettings() (*tls.Config, error) {
 		}
 	} else if h.cfg.TLS.CertPath == "" {
 		if !strings.HasPrefix(h.cfg.ServerURL, "http://") {
-			log.Warn().Msg("Listening without TLS but ServerURL does not start with http://")
+			log.Warn().Msg("listening without TLS but ServerURL does not start with http://")
 		}
 
 		return nil, err
 	} else {
 		if !strings.HasPrefix(h.cfg.ServerURL, "https://") {
-			log.Warn().Msg("Listening with TLS but ServerURL does not start with https://")
+			log.Warn().Msg("listening with TLS but ServerURL does not start with https://")
 		}
 
 		tlsConfig := &tls.Config{
@@ -970,21 +970,21 @@ func readOrCreatePrivateKey(path string) (*key.MachinePrivate, error) {
 
 	privateKey, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
-		log.Info().Str("path", path).Msg("No private key file at path, creating...")
+		log.Info().Str("path", path).Msg("no private key file at path, creating...")
 
 		machineKey := key.NewMachine()
 
 		machineKeyStr, err := machineKey.MarshalText()
 		if err != nil {
 			return nil, fmt.Errorf(
-				"failed to convert private key to string for saving: %w",
+				"converting private key to string for saving: %w",
 				err,
 			)
 		}
 		err = os.WriteFile(path, machineKeyStr, privateKeyFileMode)
 		if err != nil {
 			return nil, fmt.Errorf(
-				"failed to save private key to disk at path %q: %w",
+				"saving private key to disk at path %q: %w",
 				path,
 				err,
 			)
@@ -992,14 +992,14 @@ func readOrCreatePrivateKey(path string) (*key.MachinePrivate, error) {
 
 		return &machineKey, nil
 	} else if err != nil {
-		return nil, fmt.Errorf("failed to read private key file: %w", err)
+		return nil, fmt.Errorf("reading private key file: %w", err)
 	}
 
 	trimmedPrivateKey := strings.TrimSpace(string(privateKey))
 
 	var machineKey key.MachinePrivate
 	if err = machineKey.UnmarshalText([]byte(trimmedPrivateKey)); err != nil {
-		return nil, fmt.Errorf("failed to parse private key: %w", err)
+		return nil, fmt.Errorf("parsing private key: %w", err)
 	}
 
 	return &machineKey, nil
@@ -1023,7 +1023,7 @@ type acmeLogger struct {
 func (l *acmeLogger) RoundTrip(req *http.Request) (*http.Response, error) {
 	resp, err := l.rt.RoundTrip(req)
 	if err != nil {
-		log.Error().Err(err).Str("url", req.URL.String()).Msg("ACME request failed")
+		log.Error().Err(err).Str("url", req.URL.String()).Msg("acme request failed")
 		return nil, err
 	}
 
@@ -1031,7 +1031,7 @@ func (l *acmeLogger) RoundTrip(req *http.Request) (*http.Response, error) {
 		defer resp.Body.Close()
 
 		body, _ := io.ReadAll(resp.Body)
-		log.Error().Int("status_code", resp.StatusCode).Str("url", req.URL.String()).Bytes("body", body).Msg("ACME request returned error")
+		log.Error().Int("status_code", resp.StatusCode).Str("url", req.URL.String()).Bytes("body", body).Msg("acme request returned error")
 	}
 
 	return resp, nil

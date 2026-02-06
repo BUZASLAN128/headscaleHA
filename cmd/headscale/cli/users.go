@@ -8,6 +8,7 @@ import (
 
 	v1 "github.com/juanfont/headscale/gen/go/headscale/v1"
 	"github.com/juanfont/headscale/hscontrol/util"
+	"github.com/juanfont/headscale/hscontrol/util/zlog/zf"
 	"github.com/pterm/pterm"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -81,7 +82,7 @@ var createUserCmd = &cobra.Command{
 		defer cancel()
 		defer conn.Close()
 
-		log.Trace().Interface("client", client).Msg("Obtained gRPC client")
+		log.Trace().Interface(zf.Client, client).Msg("obtained gRPC client")
 
 		request := &v1.CreateUserRequest{Name: userName}
 
@@ -107,7 +108,7 @@ var createUserCmd = &cobra.Command{
 			request.PictureUrl = pictureURL
 		}
 
-		log.Trace().Interface("request", request).Msg("Sending CreateUser request")
+		log.Trace().Interface(zf.Request, request).Msg("sending CreateUser request")
 		response, err := client.CreateUser(ctx, request)
 		if err != nil {
 			ErrorOutput(
@@ -148,7 +149,7 @@ var destroyUserCmd = &cobra.Command{
 		}
 
 		if len(users.GetUsers()) != 1 {
-			err := errors.New("Unable to determine user to delete, query returned multiple users, use ID")
+			err := errors.New("multiple users match query, specify an ID")
 			ErrorOutput(
 				err,
 				"Error: "+status.Convert(err).Message(),
@@ -276,7 +277,7 @@ var renameUserCmd = &cobra.Command{
 		}
 
 		if len(users.GetUsers()) != 1 {
-			err := errors.New("Unable to determine user to delete, query returned multiple users, use ID")
+			err := errors.New("multiple users match query, specify an ID")
 			ErrorOutput(
 				err,
 				"Error: "+status.Convert(err).Message(),
