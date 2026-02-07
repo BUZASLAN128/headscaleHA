@@ -54,6 +54,8 @@ type HSDatabase struct {
 
 // NewHeadscaleDatabase creates a new database connection and runs migrations.
 // It accepts the full configuration to allow migrations access to policy settings.
+//
+//nolint:gocyclo // complex database initialization with many migrations
 func NewHeadscaleDatabase(
 	cfg *types.Config,
 	regCache *zcache.Cache[types.RegistrationID, types.RegisterNode],
@@ -77,7 +79,7 @@ func NewHeadscaleDatabase(
 				ID: "202501221827",
 				Migrate: func(tx *gorm.DB) error {
 					// Remove any invalid routes associated with a node that does not exist.
-					if tx.Migrator().HasTable(&types.Route{}) && tx.Migrator().HasTable(&types.Node{}) {
+					if tx.Migrator().HasTable(&types.Route{}) && tx.Migrator().HasTable(&types.Node{}) { //nolint:staticcheck // SA1019: Route kept for migrations
 						err := tx.Exec("delete from routes where node_id not in (select id from nodes)").Error
 						if err != nil {
 							return err
@@ -85,14 +87,14 @@ func NewHeadscaleDatabase(
 					}
 
 					// Remove any invalid routes without a node_id.
-					if tx.Migrator().HasTable(&types.Route{}) {
+					if tx.Migrator().HasTable(&types.Route{}) { //nolint:staticcheck // SA1019: Route kept for migrations
 						err := tx.Exec("delete from routes where node_id is null").Error
 						if err != nil {
 							return err
 						}
 					}
 
-					err := tx.AutoMigrate(&types.Route{})
+					err := tx.AutoMigrate(&types.Route{}) //nolint:staticcheck // SA1019: Route kept for migrations
 					if err != nil {
 						return fmt.Errorf("automigrating types.Route: %w", err)
 					}
@@ -110,6 +112,7 @@ func NewHeadscaleDatabase(
 					if err != nil {
 						return fmt.Errorf("automigrating types.PreAuthKey: %w", err)
 					}
+
 					err = tx.AutoMigrate(&types.Node{})
 					if err != nil {
 						return fmt.Errorf("automigrating types.Node: %w", err)
@@ -156,7 +159,8 @@ AND auth_key_id NOT IN (
 
 					nodeRoutes := map[uint64][]netip.Prefix{}
 
-					var routes []types.Route
+					var routes []types.Route //nolint:staticcheck // SA1019: Route kept for migrations
+
 					err = tx.Find(&routes).Error
 					if err != nil {
 						return fmt.Errorf("fetching routes: %w", err)
@@ -172,7 +176,7 @@ AND auth_key_id NOT IN (
 						tsaddr.SortPrefixes(routes)
 						routes = slices.Compact(routes)
 
-						data, err := json.Marshal(routes)
+						data, _ := json.Marshal(routes)
 
 						err = tx.Model(&types.Node{}).Where("id = ?", nodeID).Update("approved_routes", data).Error
 						if err != nil {
@@ -181,7 +185,7 @@ AND auth_key_id NOT IN (
 					}
 
 					// Drop the old table.
-					_ = tx.Migrator().DropTable(&types.Route{})
+					_ = tx.Migrator().DropTable(&types.Route{}) //nolint:staticcheck // SA1019: Route kept for migrations
 
 					return nil
 				},
@@ -257,10 +261,13 @@ AND auth_key_id NOT IN (
 
 					// Check if routes table exists and drop it (should have been migrated already)
 					var routesExists bool
+
 					err := tx.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='routes'").Row().Scan(&routesExists)
 					if err == nil && routesExists {
 						log.Info().Msg("dropping leftover routes table")
-						if err := tx.Exec("DROP TABLE routes").Error; err != nil {
+
+						err := tx.Exec("DROP TABLE routes").Error
+						if err != nil {
 							return fmt.Errorf("dropping routes table: %w", err)
 						}
 					}
@@ -282,6 +289,7 @@ AND auth_key_id NOT IN (
 					for _, table := range tablesToRename {
 						// Check if table exists before renaming
 						var exists bool
+
 						err := tx.Raw("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Row().Scan(&exists)
 						if err != nil {
 							return fmt.Errorf("checking if table %s exists: %w", table, err)
@@ -292,7 +300,8 @@ AND auth_key_id NOT IN (
 							_ = tx.Exec("DROP TABLE IF EXISTS " + table + "_old").Error
 
 							// Rename current table to _old
-							if err := tx.Exec("ALTER TABLE " + table + " RENAME TO " + table + "_old").Error; err != nil {
+							err := tx.Exec("ALTER TABLE " + table + " RENAME TO " + table + "_old").Error
+							if err != nil {
 								return fmt.Errorf("renaming table %s to %s_old: %w", table, table, err)
 							}
 						}
@@ -366,7 +375,8 @@ AND auth_key_id NOT IN (
 					}
 
 					for _, createSQL := range tableCreationSQL {
-						if err := tx.Exec(createSQL).Error; err != nil {
+						err := tx.Exec(createSQL).Error
+						if err != nil {
 							return fmt.Errorf("creating new table: %w", err)
 						}
 					}
@@ -395,7 +405,8 @@ AND auth_key_id NOT IN (
 					}
 
 					for _, copySQL := range dataCopySQL {
-						if err := tx.Exec(copySQL).Error; err != nil {
+						err := tx.Exec(copySQL).Error
+						if err != nil {
 							return fmt.Errorf("copying data: %w", err)
 						}
 					}
@@ -418,14 +429,16 @@ AND auth_key_id NOT IN (
 					}
 
 					for _, indexSQL := range indexes {
-						if err := tx.Exec(indexSQL).Error; err != nil {
+						err := tx.Exec(indexSQL).Error
+						if err != nil {
 							return fmt.Errorf("creating index: %w", err)
 						}
 					}
 
 					// Drop old tables only after everything succeeds
 					for _, table := range tablesToRename {
-						if err := tx.Exec("DROP TABLE IF EXISTS " + table + "_old").Error; err != nil {
+						err := tx.Exec("DROP TABLE IF EXISTS " + table + "_old").Error
+						if err != nil {
 							log.Warn().Str("table", table+"_old").Err(err).Msg("failed to drop old table, but migration succeeded")
 						}
 					}
@@ -802,6 +815,7 @@ AND auth_key_id NOT IN (
 
 		// or else it blocks...
 		sqlConn.SetMaxIdleConns(maxIdleConns)
+
 		sqlConn.SetMaxOpenConns(maxOpenConns)
 		defer sqlConn.SetMaxIdleConns(1)
 		defer sqlConn.SetMaxOpenConns(1)
@@ -819,7 +833,7 @@ AND auth_key_id NOT IN (
 			},
 		}
 
-		if err := squibble.Validate(ctx, sqlConn, dbSchema, &opts); err != nil {
+		if err := squibble.Validate(ctx, sqlConn, dbSchema, &opts); err != nil { //nolint:noinlineerr
 			return nil, fmt.Errorf("validating schema: %w", err)
 		}
 	}
@@ -845,6 +859,7 @@ func openDB(cfg types.DatabaseConfig) (*gorm.DB, error) {
 	switch cfg.Type {
 	case types.DatabaseSqlite:
 		dir := filepath.Dir(cfg.Sqlite.Path)
+
 		err := util.EnsureDir(dir)
 		if err != nil {
 			return nil, fmt.Errorf("creating directory for sqlite: %w", err)
@@ -898,7 +913,7 @@ func openDB(cfg types.DatabaseConfig) (*gorm.DB, error) {
 			Str("path", dbString).
 			Msg("Opening database")
 
-		if sslEnabled, err := strconv.ParseBool(cfg.Postgres.Ssl); err == nil {
+		if sslEnabled, err := strconv.ParseBool(cfg.Postgres.Ssl); err == nil { //nolint:noinlineerr
 			if !sslEnabled {
 				dbString += " sslmode=disable"
 			}
@@ -965,7 +980,7 @@ func runMigrations(cfg types.DatabaseConfig, dbConn *gorm.DB, migrations *gormig
 
 		// Get the current foreign key status
 		var fkOriginallyEnabled int
-		if err := dbConn.Raw("PRAGMA foreign_keys").Scan(&fkOriginallyEnabled).Error; err != nil {
+		if err := dbConn.Raw("PRAGMA foreign_keys").Scan(&fkOriginallyEnabled).Error; err != nil { //nolint:noinlineerr
 			return fmt.Errorf("checking foreign key status: %w", err)
 		}
 
@@ -994,28 +1009,31 @@ func runMigrations(cfg types.DatabaseConfig, dbConn *gorm.DB, migrations *gormig
 
 			if needsFKDisabled {
 				// Disable foreign keys for this migration
-				if err := dbConn.Exec("PRAGMA foreign_keys = OFF").Error; err != nil {
+				err := dbConn.Exec("PRAGMA foreign_keys = OFF").Error
+				if err != nil {
 					return fmt.Errorf("disabling foreign keys for migration %s: %w", migrationID, err)
 				}
 			} else {
 				// Ensure foreign keys are enabled for this migration
-				if err := dbConn.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+				err := dbConn.Exec("PRAGMA foreign_keys = ON").Error
+				if err != nil {
 					return fmt.Errorf("enabling foreign keys for migration %s: %w", migrationID, err)
 				}
 			}
 
 			// Run up to this specific migration (will only run the next pending migration)
-			if err := migrations.MigrateTo(migrationID); err != nil {
+			err := migrations.MigrateTo(migrationID)
+			if err != nil {
 				return fmt.Errorf("running migration %s: %w", migrationID, err)
 			}
 		}
 
-		if err := dbConn.Exec("PRAGMA foreign_keys = ON").Error; err != nil {
+		if err := dbConn.Exec("PRAGMA foreign_keys = ON").Error; err != nil { //nolint:noinlineerr
 			return fmt.Errorf("restoring foreign keys: %w", err)
 		}
 
 		// Run the rest of the migrations
-		if err := migrations.Migrate(); err != nil {
+		if err := migrations.Migrate(); err != nil { //nolint:noinlineerr
 			return err
 		}
 
@@ -1033,16 +1051,22 @@ func runMigrations(cfg types.DatabaseConfig, dbConn *gorm.DB, migrations *gormig
 		if err != nil {
 			return err
 		}
+		defer rows.Close()
 
 		for rows.Next() {
 			var violation constraintViolation
-			if err := rows.Scan(&violation.Table, &violation.RowID, &violation.Parent, &violation.ConstraintIndex); err != nil {
+
+			err := rows.Scan(&violation.Table, &violation.RowID, &violation.Parent, &violation.ConstraintIndex)
+			if err != nil {
 				return err
 			}
 
 			violatedConstraints = append(violatedConstraints, violation)
 		}
-		_ = rows.Close()
+
+		if err := rows.Err(); err != nil { //nolint:noinlineerr
+			return err
+		}
 
 		if len(violatedConstraints) > 0 {
 			for _, violation := range violatedConstraints {
@@ -1057,7 +1081,8 @@ func runMigrations(cfg types.DatabaseConfig, dbConn *gorm.DB, migrations *gormig
 		}
 	} else {
 		// PostgreSQL can run all migrations in one block - no foreign key issues
-		if err := migrations.Migrate(); err != nil {
+		err := migrations.Migrate()
+		if err != nil {
 			return err
 		}
 	}
@@ -1068,6 +1093,7 @@ func runMigrations(cfg types.DatabaseConfig, dbConn *gorm.DB, migrations *gormig
 func (hsdb *HSDatabase) PingDB(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Second)
 	defer cancel()
+
 	sqlDB, err := hsdb.DB.DB()
 	if err != nil {
 		return err
@@ -1083,7 +1109,7 @@ func (hsdb *HSDatabase) Close() error {
 	}
 
 	if hsdb.cfg.Database.Type == types.DatabaseSqlite && hsdb.cfg.Database.Sqlite.WriteAheadLog {
-		db.Exec("VACUUM")
+		db.Exec("VACUUM") //nolint:errcheck,noctx
 	}
 
 	return db.Close()
@@ -1092,12 +1118,14 @@ func (hsdb *HSDatabase) Close() error {
 func (hsdb *HSDatabase) Read(fn func(rx *gorm.DB) error) error {
 	rx := hsdb.DB.Begin()
 	defer rx.Rollback()
+
 	return fn(rx)
 }
 
 func Read[T any](db *gorm.DB, fn func(rx *gorm.DB) (T, error)) (T, error) {
 	rx := db.Begin()
 	defer rx.Rollback()
+
 	ret, err := fn(rx)
 	if err != nil {
 		var no T
@@ -1110,7 +1138,9 @@ func Read[T any](db *gorm.DB, fn func(rx *gorm.DB) (T, error)) (T, error) {
 func (hsdb *HSDatabase) Write(fn func(tx *gorm.DB) error) error {
 	tx := hsdb.DB.Begin()
 	defer tx.Rollback()
-	if err := fn(tx); err != nil {
+
+	err := fn(tx)
+	if err != nil {
 		return err
 	}
 
@@ -1120,6 +1150,7 @@ func (hsdb *HSDatabase) Write(fn func(tx *gorm.DB) error) error {
 func Write[T any](db *gorm.DB, fn func(tx *gorm.DB) (T, error)) (T, error) {
 	tx := db.Begin()
 	defer tx.Rollback()
+
 	ret, err := fn(tx)
 	if err != nil {
 		var no T
