@@ -11,7 +11,6 @@ import (
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/juanfont/headscale/hscontrol/types"
 	"github.com/juanfont/headscale/hscontrol/util"
-	"github.com/prometheus/common/model"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go4.org/netipx"
@@ -711,7 +710,7 @@ func TestUnmarshalPolicy(t *testing.T) {
   },
   "ssh": [
     {
-      "action": "accept",
+      "action": "check",
       "src": [
         "group:admins"
       ],
@@ -730,7 +729,7 @@ func TestUnmarshalPolicy(t *testing.T) {
 				},
 				SSHs: []SSH{
 					{
-						Action: "accept",
+						Action: "check",
 						Sources: SSHSrcAliases{
 							gp("group:admins"),
 						},
@@ -740,7 +739,7 @@ func TestUnmarshalPolicy(t *testing.T) {
 						Users: []SSHUser{
 							SSHUser("root"),
 						},
-						CheckPeriod: model.Duration(24 * time.Hour),
+						CheckPeriod: &SSHCheckPeriod{Duration: 24 * time.Hour},
 					},
 				},
 			},
@@ -1766,6 +1765,291 @@ func TestUnmarshalPolicy(t *testing.T) {
 				},
 			},
 		},
+		// Issue #2754: IPv6 addresses with brackets in ACL destinations.
+		{
+			name: "2754-bracketed-ipv6-single-port",
+			input: `
+{
+	"acls": [{
+		"action": "accept",
+		"src": ["alice@"],
+		"dst": ["[fd7a:115c:a1e0::87e1]:443"]
+	}]
+}
+`,
+			want: &Policy{
+				ACLs: []ACL{
+					{
+						Action: "accept",
+						Sources: Aliases{
+							up("alice@"),
+						},
+						Destinations: []AliasWithPorts{
+							{
+								Alias: pp("fd7a:115c:a1e0::87e1/128"),
+								Ports: []tailcfg.PortRange{{First: 443, Last: 443}},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "ssh-localpart-valid",
+			input: `
+{
+  "tagOwners": {"tag:prod": ["admin@"]},
+  "ssh": [{
+    "action": "accept",
+    "src": ["autogroup:member"],
+    "dst": ["tag:prod"],
+    "users": ["localpart:*@example.com"]
+  }]
+}
+`,
+			want: &Policy{
+				TagOwners: TagOwners{
+					Tag("tag:prod"): Owners{up("admin@")},
+				},
+				SSHs: []SSH{
+					{
+						Action:       "accept",
+						Sources:      SSHSrcAliases{agp("autogroup:member")},
+						Destinations: SSHDstAliases{tp("tag:prod")},
+						Users:        []SSHUser{SSHUser("localpart:*@example.com")},
+					},
+				},
+			},
+		},
+		{
+			name: "2754-bracketed-ipv6-multiple-ports",
+			input: `
+{
+	"acls": [{
+		"action": "accept",
+		"src": ["alice@"],
+		"dst": ["[fd7a:115c:a1e0::87e1]:80,443"]
+	}]
+}
+`,
+			want: &Policy{
+				ACLs: []ACL{
+					{
+						Action: "accept",
+						Sources: Aliases{
+							up("alice@"),
+						},
+						Destinations: []AliasWithPorts{
+							{
+								Alias: pp("fd7a:115c:a1e0::87e1/128"),
+								Ports: []tailcfg.PortRange{
+									{First: 80, Last: 80},
+									{First: 443, Last: 443},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "ssh-localpart-with-other-users",
+			input: `
+{
+  "tagOwners": {"tag:prod": ["admin@"]},
+  "ssh": [{
+    "action": "accept",
+    "src": ["autogroup:member"],
+    "dst": ["tag:prod"],
+    "users": ["localpart:*@example.com", "root", "autogroup:nonroot"]
+  }]
+}
+`,
+			want: &Policy{
+				TagOwners: TagOwners{
+					Tag("tag:prod"): Owners{up("admin@")},
+				},
+				SSHs: []SSH{
+					{
+						Action:       "accept",
+						Sources:      SSHSrcAliases{agp("autogroup:member")},
+						Destinations: SSHDstAliases{tp("tag:prod")},
+						Users:        []SSHUser{SSHUser("localpart:*@example.com"), "root", SSHUser(AutoGroupNonRoot)},
+					},
+				},
+			},
+		},
+		{
+			name: "2754-bracketed-ipv6-wildcard-port",
+			input: `
+{
+	"acls": [{
+		"action": "accept",
+		"src": ["alice@"],
+		"dst": ["[fd7a:115c:a1e0::87e1]:*"]
+	}]
+}
+`,
+			want: &Policy{
+				ACLs: []ACL{
+					{
+						Action: "accept",
+						Sources: Aliases{
+							up("alice@"),
+						},
+						Destinations: []AliasWithPorts{
+							{
+								Alias: pp("fd7a:115c:a1e0::87e1/128"),
+								Ports: []tailcfg.PortRange{tailcfg.PortRangeAny},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "2754-bracketed-ipv6-cidr-inside-rejected",
+			input: `
+{
+	"acls": [{
+		"action": "accept",
+		"src": ["alice@"],
+		"dst": ["[fd7a:115c:a1e0::/48]:443"]
+	}]
+}
+`,
+			wantErr: "square brackets are only valid around IPv6 addresses",
+		},
+		{
+			name: "2754-bracketed-ipv6-port-range",
+			input: `
+{
+	"acls": [{
+		"action": "accept",
+		"src": ["alice@"],
+		"dst": ["[::1]:80-443"]
+	}]
+}
+`,
+			want: &Policy{
+				ACLs: []ACL{
+					{
+						Action: "accept",
+						Sources: Aliases{
+							up("alice@"),
+						},
+						Destinations: []AliasWithPorts{
+							{
+								Alias: pp("::1/128"),
+								Ports: []tailcfg.PortRange{{First: 80, Last: 443}},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "2754-bracketed-ipv6-cidr-outside-brackets",
+			input: `
+{
+	"acls": [{
+		"action": "accept",
+		"src": ["alice@"],
+		"dst": ["[fd7a:115c:a1e0::2905]/128:80,443"]
+	}]
+}
+`,
+			want: &Policy{
+				ACLs: []ACL{
+					{
+						Action: "accept",
+						Sources: Aliases{
+							up("alice@"),
+						},
+						Destinations: []AliasWithPorts{
+							{
+								Alias: pp("fd7a:115c:a1e0::2905/128"),
+								Ports: []tailcfg.PortRange{
+									{First: 80, Last: 80},
+									{First: 443, Last: 443},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "2754-bracketed-ipv4-rejected",
+			input: `
+{
+	"acls": [{
+		"action": "accept",
+		"src": ["alice@"],
+		"dst": ["[192.168.1.1]:80"]
+	}]
+}
+`,
+			wantErr: "square brackets are only valid around IPv6 addresses",
+		},
+		{
+			name: "2754-bracketed-hostname-rejected",
+			input: `
+{
+	"acls": [{
+		"action": "accept",
+		"src": ["alice@"],
+		"dst": ["[my-hostname]:80"]
+	}]
+}
+`,
+			wantErr: "square brackets are only valid around IPv6 addresses",
+		},
+		{
+			name: "ssh-localpart-invalid-no-at-sign",
+			input: `
+{
+  "tagOwners": {"tag:prod": ["admin@"]},
+  "ssh": [{
+    "action": "accept",
+    "src": ["autogroup:member"],
+    "dst": ["tag:prod"],
+    "users": ["localpart:foo"]
+  }]
+}
+`,
+			wantErr: "invalid localpart format",
+		},
+		{
+			name: "ssh-localpart-invalid-non-wildcard",
+			input: `
+{
+  "tagOwners": {"tag:prod": ["admin@"]},
+  "ssh": [{
+    "action": "accept",
+    "src": ["autogroup:member"],
+    "dst": ["tag:prod"],
+    "users": ["localpart:alice@example.com"]
+  }]
+}
+`,
+			wantErr: "invalid localpart format",
+		},
+		{
+			name: "ssh-localpart-invalid-empty-domain",
+			input: `
+{
+  "tagOwners": {"tag:prod": ["admin@"]},
+  "ssh": [{
+    "action": "accept",
+    "src": ["autogroup:member"],
+    "dst": ["tag:prod"],
+    "users": ["localpart:*@"]
+  }]
+}
+`,
+			wantErr: "invalid localpart format",
+		},
 	}
 
 	cmps := append(util.Comparers,
@@ -1848,14 +2132,6 @@ func TestResolvePolicy(t *testing.T) {
 		"testuser2":  {Model: gorm.Model{ID: 6}, Name: "testuser2"},
 	}
 
-	// Extract users to variables so we can take their addresses
-	testuser := users["testuser"]
-	groupuser := users["groupuser"]
-	groupuser1 := users["groupuser1"]
-	groupuser2 := users["groupuser2"]
-	notme := users["notme"]
-	testuser2 := users["testuser2"]
-
 	tests := []struct {
 		name      string
 		nodes     types.Nodes
@@ -1885,27 +2161,27 @@ func TestResolvePolicy(t *testing.T) {
 			nodes: types.Nodes{
 				// Not matching other user
 				{
-					User: new(notme),
+					User: new(users["notme"]),
 					IPv4: ap("100.100.101.1"),
 				},
 				// Not matching forced tags
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:anything"},
 					IPv4: ap("100.100.101.2"),
 				},
 				// not matching because it's tagged (tags copied from AuthKey)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"alsotagged"},
 					IPv4: ap("100.100.101.3"),
 				},
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					IPv4: ap("100.100.101.103"),
 				},
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					IPv4: ap("100.100.101.104"),
 				},
 			},
@@ -1917,27 +2193,27 @@ func TestResolvePolicy(t *testing.T) {
 			nodes: types.Nodes{
 				// Not matching other user
 				{
-					User: new(notme),
+					User: new(users["notme"]),
 					IPv4: ap("100.100.101.4"),
 				},
 				// Not matching forced tags
 				{
-					User: new(groupuser),
+					User: new(users["groupuser"]),
 					Tags: []string{"tag:anything"},
 					IPv4: ap("100.100.101.5"),
 				},
 				// not matching because it's tagged (tags copied from AuthKey)
 				{
-					User: new(groupuser),
+					User: new(users["groupuser"]),
 					Tags: []string{"tag:alsotagged"},
 					IPv4: ap("100.100.101.6"),
 				},
 				{
-					User: new(groupuser),
+					User: new(users["groupuser"]),
 					IPv4: ap("100.100.101.203"),
 				},
 				{
-					User: new(groupuser),
+					User: new(users["groupuser"]),
 					IPv4: ap("100.100.101.204"),
 				},
 			},
@@ -1955,7 +2231,7 @@ func TestResolvePolicy(t *testing.T) {
 			nodes: types.Nodes{
 				// Not matching other user
 				{
-					User: new(notme),
+					User: new(users["notme"]),
 					IPv4: ap("100.100.101.9"),
 				},
 				// Not matching forced tags
@@ -2052,11 +2328,11 @@ func TestResolvePolicy(t *testing.T) {
 			toResolve: new(Group("group:testgroup")),
 			nodes: types.Nodes{
 				{
-					User: new(groupuser1),
+					User: new(users["groupuser1"]),
 					IPv4: ap("100.100.101.203"),
 				},
 				{
-					User: new(groupuser2),
+					User: new(users["groupuser2"]),
 					IPv4: ap("100.100.101.204"),
 				},
 			},
@@ -2077,7 +2353,7 @@ func TestResolvePolicy(t *testing.T) {
 			toResolve: new(Username("invaliduser@")),
 			nodes: types.Nodes{
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					IPv4: ap("100.100.101.103"),
 				},
 			},
@@ -2109,36 +2385,36 @@ func TestResolvePolicy(t *testing.T) {
 			nodes: types.Nodes{
 				// Node with no tags (should be included - is a member)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					IPv4: ap("100.100.101.1"),
 				},
 				// Node with single tag (should be excluded - tagged nodes are not members)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:test"},
 					IPv4: ap("100.100.101.2"),
 				},
 				// Node with multiple tags, all defined in policy (should be excluded)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:test", "tag:other"},
 					IPv4: ap("100.100.101.3"),
 				},
 				// Node with tag not defined in policy (should be excluded - still tagged)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:undefined"},
 					IPv4: ap("100.100.101.4"),
 				},
 				// Node with mixed tags - some defined, some not (should be excluded)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:test", "tag:undefined"},
 					IPv4: ap("100.100.101.5"),
 				},
 				// Another untagged node from different user (should be included)
 				{
-					User: new(testuser2),
+					User: new(users["testuser2"]),
 					IPv4: ap("100.100.101.6"),
 				},
 			},
@@ -2159,41 +2435,41 @@ func TestResolvePolicy(t *testing.T) {
 			nodes: types.Nodes{
 				// Node with no tags (should be excluded - not tagged)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					IPv4: ap("100.100.101.1"),
 				},
 				// Node with single tag defined in policy (should be included)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:test"},
 					IPv4: ap("100.100.101.2"),
 				},
 				// Node with multiple tags, all defined in policy (should be included)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:test", "tag:other"},
 					IPv4: ap("100.100.101.3"),
 				},
 				// Node with tag not defined in policy (should be included - still tagged)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:undefined"},
 					IPv4: ap("100.100.101.4"),
 				},
 				// Node with mixed tags - some defined, some not (should be included)
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:test", "tag:undefined"},
 					IPv4: ap("100.100.101.5"),
 				},
 				// Another untagged node from different user (should be excluded)
 				{
-					User: new(testuser2),
+					User: new(users["testuser2"]),
 					IPv4: ap("100.100.101.6"),
 				},
 				// Tagged node from different user (should be included)
 				{
-					User: new(testuser2),
+					User: new(users["testuser2"]),
 					Tags: []string{"tag:server"},
 					IPv4: ap("100.100.101.7"),
 				},
@@ -2216,20 +2492,20 @@ func TestResolvePolicy(t *testing.T) {
 			toResolve: new(AutoGroupSelf),
 			nodes: types.Nodes{
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					IPv4: ap("100.100.101.1"),
 				},
 				{
-					User: new(testuser2),
+					User: new(users["testuser2"]),
 					IPv4: ap("100.100.101.2"),
 				},
 				{
-					User: new(testuser),
+					User: new(users["testuser"]),
 					Tags: []string{"tag:test"},
 					IPv4: ap("100.100.101.3"),
 				},
 				{
-					User: new(testuser2),
+					User: new(users["testuser2"]),
 					Tags: []string{"tag:test"},
 					IPv4: ap("100.100.101.4"),
 				},
@@ -2458,56 +2734,63 @@ func TestResolveAutoApprovers(t *testing.T) {
 
 func TestSSHUsers_NormalUsers(t *testing.T) {
 	tests := []struct {
-		name     string
-		users    SSHUsers
-		expected []SSHUser
+		name  string
+		users SSHUsers
+		want  []SSHUser
 	}{
 		{
-			name:     "empty users",
-			users:    SSHUsers{},
-			expected: []SSHUser{},
+			name:  "empty users",
+			users: SSHUsers{},
+			want:  nil,
 		},
 		{
-			name:     "only root",
-			users:    SSHUsers{"root"},
-			expected: []SSHUser{},
+			name:  "only root",
+			users: SSHUsers{"root"},
+			want:  nil,
 		},
 		{
-			name:     "only autogroup:nonroot",
-			users:    SSHUsers{SSHUser(AutoGroupNonRoot)},
-			expected: []SSHUser{},
+			name:  "only autogroup:nonroot",
+			users: SSHUsers{SSHUser(AutoGroupNonRoot)},
+			want:  nil,
 		},
 		{
-			name:     "only normal user",
-			users:    SSHUsers{"ssh-it-user"},
-			expected: []SSHUser{"ssh-it-user"},
+			name:  "only normal user",
+			users: SSHUsers{"ssh-it-user"},
+			want:  []SSHUser{"ssh-it-user"},
 		},
 		{
-			name:     "multiple normal users",
-			users:    SSHUsers{"ubuntu", "admin", "user1"},
-			expected: []SSHUser{"ubuntu", "admin", "user1"},
+			name:  "multiple normal users",
+			users: SSHUsers{"ubuntu", "admin", "user1"},
+			want:  []SSHUser{"ubuntu", "admin", "user1"},
 		},
 		{
-			name:     "mixed users with root",
-			users:    SSHUsers{"ubuntu", "root", "admin"},
-			expected: []SSHUser{"ubuntu", "admin"},
+			name:  "mixed users with root",
+			users: SSHUsers{"ubuntu", "root", "admin"},
+			want:  []SSHUser{"ubuntu", "admin"},
 		},
 		{
-			name:     "mixed users with autogroup:nonroot",
-			users:    SSHUsers{"ubuntu", SSHUser(AutoGroupNonRoot), "admin"},
-			expected: []SSHUser{"ubuntu", "admin"},
+			name:  "mixed users with autogroup:nonroot",
+			users: SSHUsers{"ubuntu", SSHUser(AutoGroupNonRoot), "admin"},
+			want:  []SSHUser{"ubuntu", "admin"},
 		},
 		{
-			name:     "mixed users with both root and autogroup:nonroot",
-			users:    SSHUsers{"ubuntu", "root", SSHUser(AutoGroupNonRoot), "admin"},
-			expected: []SSHUser{"ubuntu", "admin"},
+			name:  "mixed users with both root and autogroup:nonroot",
+			users: SSHUsers{"ubuntu", "root", SSHUser(AutoGroupNonRoot), "admin"},
+			want:  []SSHUser{"ubuntu", "admin"},
+		},
+		{
+			name:  "excludes localpart entries",
+			users: SSHUsers{"ubuntu", "root", SSHUser(AutoGroupNonRoot), SSHUser("localpart:*@example.com"), "admin"},
+			want:  []SSHUser{"ubuntu", "admin"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := tt.users.NormalUsers()
-			assert.ElementsMatch(t, tt.expected, result, "NormalUsers() should return expected normal users")
+			got := tt.users.NormalUsers()
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("NormalUsers() unexpected result (-want +got):\n%s", diff)
+			}
 		})
 	}
 }
@@ -2580,6 +2863,142 @@ func TestSSHUsers_ContainsNonRoot(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := tt.users.ContainsNonRoot()
 			assert.Equal(t, tt.expected, result, "ContainsNonRoot() should return expected result")
+		})
+	}
+}
+
+func TestSSHUsers_ContainsLocalpart(t *testing.T) {
+	tests := []struct {
+		name     string
+		users    SSHUsers
+		expected bool
+	}{
+		{
+			name:     "empty users",
+			users:    SSHUsers{},
+			expected: false,
+		},
+		{
+			name:     "contains localpart",
+			users:    SSHUsers{SSHUser("localpart:*@example.com")},
+			expected: true,
+		},
+		{
+			name:     "does not contain localpart",
+			users:    SSHUsers{"ubuntu", "admin", "root"},
+			expected: false,
+		},
+		{
+			name:     "contains localpart among others",
+			users:    SSHUsers{"ubuntu", SSHUser("localpart:*@example.com"), "admin"},
+			expected: true,
+		},
+		{
+			name:     "multiple localpart entries",
+			users:    SSHUsers{SSHUser("localpart:*@a.com"), SSHUser("localpart:*@b.com")},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := tt.users.ContainsLocalpart()
+			assert.Equal(t, tt.expected, result, "ContainsLocalpart() should return expected result")
+		})
+	}
+}
+
+func TestSSHUsers_LocalpartEntries(t *testing.T) {
+	tests := []struct {
+		name  string
+		users SSHUsers
+		want  []SSHUser
+	}{
+		{
+			name:  "empty users",
+			users: SSHUsers{},
+			want:  nil,
+		},
+		{
+			name:  "no localpart entries",
+			users: SSHUsers{"root", "ubuntu", SSHUser(AutoGroupNonRoot)},
+			want:  nil,
+		},
+		{
+			name:  "single localpart entry",
+			users: SSHUsers{"root", SSHUser("localpart:*@example.com"), "ubuntu"},
+			want:  []SSHUser{SSHUser("localpart:*@example.com")},
+		},
+		{
+			name:  "multiple localpart entries",
+			users: SSHUsers{SSHUser("localpart:*@a.com"), "root", SSHUser("localpart:*@b.com")},
+			want:  []SSHUser{SSHUser("localpart:*@a.com"), SSHUser("localpart:*@b.com")},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := tt.users.LocalpartEntries()
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Errorf("LocalpartEntries() unexpected result (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestSSHUser_ParseLocalpart(t *testing.T) {
+	tests := []struct {
+		name           string
+		user           SSHUser
+		expectedDomain string
+		expectErr      bool
+	}{
+		{
+			name:           "valid localpart",
+			user:           SSHUser("localpart:*@example.com"),
+			expectedDomain: "example.com",
+		},
+		{
+			name:           "valid localpart with subdomain",
+			user:           SSHUser("localpart:*@corp.example.com"),
+			expectedDomain: "corp.example.com",
+		},
+		{
+			name:      "missing prefix",
+			user:      SSHUser("ubuntu"),
+			expectErr: true,
+		},
+		{
+			name:      "missing @ sign",
+			user:      SSHUser("localpart:foo"),
+			expectErr: true,
+		},
+		{
+			name:      "non-wildcard local part",
+			user:      SSHUser("localpart:alice@example.com"),
+			expectErr: true,
+		},
+		{
+			name:      "empty domain",
+			user:      SSHUser("localpart:*@"),
+			expectErr: true,
+		},
+		{
+			name:      "just prefix",
+			user:      SSHUser("localpart:"),
+			expectErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			domain, err := tt.user.ParseLocalpart()
+			if tt.expectErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+				assert.Equal(t, tt.expectedDomain, domain)
+			}
 		})
 	}
 }
@@ -3646,6 +4065,221 @@ func TestFlattenTagOwners(t *testing.T) {
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Errorf("flattenTagOwners() mismatch (-want +got):\n%s", diff)
 			}
+		})
+	}
+}
+
+func TestSSHCheckPeriodUnmarshal(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    *SSHCheckPeriod
+		wantErr bool
+	}{
+		{
+			name:  "always",
+			input: `"always"`,
+			want:  &SSHCheckPeriod{Always: true},
+		},
+		{
+			name:  "1h",
+			input: `"1h"`,
+			want:  &SSHCheckPeriod{Duration: time.Hour},
+		},
+		{
+			name:  "30m",
+			input: `"30m"`,
+			want:  &SSHCheckPeriod{Duration: 30 * time.Minute},
+		},
+		{
+			name:  "168h",
+			input: `"168h"`,
+			want:  &SSHCheckPeriod{Duration: 168 * time.Hour},
+		},
+		{
+			name:    "invalid",
+			input:   `"notaduration"`,
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var got SSHCheckPeriod
+
+			err := json.Unmarshal([]byte(tt.input), &got)
+			if tt.wantErr {
+				require.Error(t, err)
+
+				return
+			}
+
+			require.NoError(t, err)
+			assert.Equal(t, *tt.want, got)
+		})
+	}
+}
+
+func TestSSHCheckPeriodRoundTrip(t *testing.T) {
+	tests := []struct {
+		name  string
+		input SSHCheckPeriod
+	}{
+		{
+			name:  "always",
+			input: SSHCheckPeriod{Always: true},
+		},
+		{
+			name:  "2h",
+			input: SSHCheckPeriod{Duration: 2 * time.Hour},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := json.Marshal(tt.input)
+			require.NoError(t, err)
+
+			var got SSHCheckPeriod
+
+			err = json.Unmarshal(data, &got)
+			require.NoError(t, err)
+
+			assert.Equal(t, tt.input, got)
+		})
+	}
+}
+
+func TestSSHCheckPeriodNilInSSH(t *testing.T) {
+	input := `{
+		"action": "check",
+		"src": ["user@"],
+		"dst": ["autogroup:member"],
+		"users": ["root"]
+	}`
+
+	var ssh SSH
+
+	err := json.Unmarshal([]byte(input), &ssh)
+	require.NoError(t, err)
+	assert.Nil(t, ssh.CheckPeriod)
+}
+
+func TestSSHCheckPeriodValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		period  SSHCheckPeriod
+		wantErr error
+	}{
+		{
+			name:   "always is valid",
+			period: SSHCheckPeriod{Always: true},
+		},
+		{
+			name:   "1m minimum valid",
+			period: SSHCheckPeriod{Duration: time.Minute},
+		},
+		{
+			name:   "168h maximum valid",
+			period: SSHCheckPeriod{Duration: 168 * time.Hour},
+		},
+		{
+			name:    "30s below minimum",
+			period:  SSHCheckPeriod{Duration: 30 * time.Second},
+			wantErr: ErrSSHCheckPeriodBelowMin,
+		},
+		{
+			name:    "169h above maximum",
+			period:  SSHCheckPeriod{Duration: 169 * time.Hour},
+			wantErr: ErrSSHCheckPeriodAboveMax,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.period.Validate()
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+
+				return
+			}
+
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestSSHCheckPeriodPolicyValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		ssh     SSH
+		wantErr error
+	}{
+		{
+			name: "check with nil period is valid",
+			ssh: SSH{
+				Action:       SSHActionCheck,
+				Sources:      SSHSrcAliases{up("user@")},
+				Destinations: SSHDstAliases{agp("autogroup:member")},
+				Users:        SSHUsers{"root"},
+			},
+		},
+		{
+			name: "check with always is valid",
+			ssh: SSH{
+				Action:       SSHActionCheck,
+				Sources:      SSHSrcAliases{up("user@")},
+				Destinations: SSHDstAliases{agp("autogroup:member")},
+				Users:        SSHUsers{"root"},
+				CheckPeriod:  &SSHCheckPeriod{Always: true},
+			},
+		},
+		{
+			name: "check with 1h is valid",
+			ssh: SSH{
+				Action:       SSHActionCheck,
+				Sources:      SSHSrcAliases{up("user@")},
+				Destinations: SSHDstAliases{agp("autogroup:member")},
+				Users:        SSHUsers{"root"},
+				CheckPeriod:  &SSHCheckPeriod{Duration: time.Hour},
+			},
+		},
+		{
+			name: "accept with checkPeriod is invalid",
+			ssh: SSH{
+				Action:       SSHActionAccept,
+				Sources:      SSHSrcAliases{up("user@")},
+				Destinations: SSHDstAliases{agp("autogroup:member")},
+				Users:        SSHUsers{"root"},
+				CheckPeriod:  &SSHCheckPeriod{Duration: time.Hour},
+			},
+			wantErr: ErrSSHCheckPeriodOnNonCheck,
+		},
+		{
+			name: "check with 30s is invalid",
+			ssh: SSH{
+				Action:       SSHActionCheck,
+				Sources:      SSHSrcAliases{up("user@")},
+				Destinations: SSHDstAliases{agp("autogroup:member")},
+				Users:        SSHUsers{"root"},
+				CheckPeriod:  &SSHCheckPeriod{Duration: 30 * time.Second},
+			},
+			wantErr: ErrSSHCheckPeriodBelowMin,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pol := &Policy{SSHs: []SSH{tt.ssh}}
+			err := pol.validate()
+
+			if tt.wantErr != nil {
+				require.ErrorIs(t, err, tt.wantErr)
+
+				return
+			}
+
+			require.NoError(t, err)
 		})
 	}
 }

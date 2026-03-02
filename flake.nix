@@ -27,7 +27,7 @@
         let
           pkgs = nixpkgs.legacyPackages.${prev.stdenv.hostPlatform.system};
           buildGo = pkgs.buildGo126Module;
-          vendorHash = "sha256-9BvphYDAxzwooyVokI3l+q1wRuRsWn/qM+NpWUgqJH0=";
+          vendorHash = "sha256-oUN53ELb3+xn4yA7lEfXyT2c7NxbQC6RtbkGVq6+RLU=";
         in
         {
           headscale = buildGo {
@@ -97,16 +97,16 @@
           # Build golangci-lint with Go 1.26 (upstream uses hardcoded Go version)
           golangci-lint = buildGo rec {
             pname = "golangci-lint";
-            version = "2.8.0";
+            version = "2.9.0";
 
             src = pkgs.fetchFromGitHub {
               owner = "golangci";
               repo = "golangci-lint";
               rev = "v${version}";
-              hash = "sha256-w6MAOirj8rPHYbKrW4gJeemXCS64fNtteV6IioqIQTQ=";
+              hash = "sha256-8LEtm1v0slKwdLBtS41OilKJLXytSxcI9fUlZbj5Gfw=";
             };
 
-            vendorHash = "sha256-/Vqo/yrmGh6XipELQ9NDtlMEO2a654XykmvnMs0BdrI=";
+            vendorHash = "sha256-w8JfF6n1ylrU652HEv/cYdsOdDZz9J2uRQDqxObyhkY=";
 
             subPackages = [ "cmd/golangci-lint" ];
 
@@ -135,11 +135,6 @@
             };
           };
 
-          # The package uses buildGo125Module, not the convention.
-          # goreleaser = prev.goreleaser.override {
-          #   buildGoModule = buildGo;
-          # };
-
           gotestsum = prev.gotestsum.override {
             buildGoModule = buildGo;
           };
@@ -152,9 +147,9 @@
             buildGoModule = buildGo;
           };
 
-          # gopls = prev.gopls.override {
-          #   buildGoModule = buildGo;
-          # };
+          gopls = prev.gopls.override {
+            buildGoLatestModule = buildGo;
+          };
         };
     }
     // flake-utils.lib.eachDefaultSystem
@@ -184,6 +179,10 @@
             yq-go
             ripgrep
             postgresql
+            python313Packages.mdformat
+            python313Packages.mdformat-footnote
+            python313Packages.mdformat-frontmatter
+            python313Packages.mdformat-mkdocs
             prek
 
             # 'dot' is needed for pprof graphs
